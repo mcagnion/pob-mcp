@@ -221,6 +221,7 @@ export async function handleLuaGetStats(context: LuaHandlerContext, category?: s
       fields = [
         'TotalDPS', 'CombinedDPS', 'TotalDot', 'TotalDotDPS', 'WithBleedDPS', 'WithIgniteDPS',
         'WithPoisonDPS', 'IgniteDPS', 'BleedDPS', 'PoisonDPS', 'AverageDamage', 'AverageBurstDamage',
+        'FullDPS', 'FullDotDPS', 'ActiveTotemLimit',
         'Speed', 'HitChance', 'CritChance', 'CritMultiplier', 'PreEffectiveCritChance',
         'EffectiveCritChance', 'MainHandAccuracy', 'OffHandAccuracy', 'ManaCost', 'ManaPerSecondCost',
         'LifeCost', 'LifePerSecondCost', 'ESCost', 'ESPerSecondCost', 'RageCost',
