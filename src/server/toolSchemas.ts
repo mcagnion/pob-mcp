@@ -404,7 +404,7 @@ export function getLuaToolSchemas(): any[] {
     },
     {
       name: "update_tree_delta",
-      description: "Incrementally add or remove specific passive nodes from the current tree allocation. Automatically finds and includes intermediate path nodes when adding nodes that aren't directly adjacent to the current tree. Safer than lua_set_tree because you only specify the nodes to change, not the entire tree. Note: max 8 ascendancy points allowed.",
+      description: "STATEFUL MUTATION: incrementally add or remove passive nodes from the currently loaded tree allocation. This is not an isolated what-if calculator and does not provide an undo token; use suggest_optimal_nodes for measured passive ranking or lua_reload_build after inspection to restore from disk. Note: max 8 ascendancy points allowed.",
       inputSchema: {
         type: "object",
         properties: {

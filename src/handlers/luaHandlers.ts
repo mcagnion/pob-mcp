@@ -13,6 +13,81 @@ export interface LuaHandlerContext {
   stopLuaClient: () => Promise<void>;
 }
 
+function statIsPresent(value: unknown): boolean {
+  return value != null && value !== 0 && value !== '0';
+}
+
+function statIsDisplayableEntry(key: string, value: unknown): boolean {
+  return !key.startsWith('_') && statIsPresent(value) && (typeof value !== 'object' || value === null);
+}
+
+function buildSkillContextLines(skills: any): string[] {
+  if (!skills || typeof skills !== 'object') return [];
+
+  const lines: string[] = [];
+  const groups: any[] = Array.isArray(skills.groups) ? skills.groups : [];
+  const mainGroup = groups.find(group => group.index === skills.mainSocketGroup);
+
+  if (skills.mainSocketGroup != null) {
+    let mainLine = `Main skill group: ${skills.mainSocketGroup}`;
+    if (mainGroup?.label) mainLine += ` (${mainGroup.label})`;
+    if (mainGroup?.slot) mainLine += ` in ${mainGroup.slot}`;
+    lines.push(mainLine);
+  }
+
+  if (mainGroup?.skills?.length) {
+    lines.push(`Main active skills: ${mainGroup.skills.join(', ')}`);
+  }
+
+  const fullDpsGroups = groups
+    .filter(group => group.includeInFullDPS)
+    .map(group => `${group.index}${group.label ? `:${group.label}` : ''}`);
+  if (fullDpsGroups.length > 0) {
+    lines.push(`Groups included in FullDPS: ${fullDpsGroups.join(', ')}`);
+  }
+
+  return lines;
+}
+
+function buildStatsMetadataLines(stats: Record<string, any>, category?: string, skills?: any): string[] {
+  const lines = [
+    '**Metadata:**',
+    'Source: live Lua bridge get_stats',
+    `Category: ${category || 'all'}`,
+    `Freshness marker: retrievedAt=${new Date().toISOString()}`,
+  ];
+
+  const skillLines = buildSkillContextLines(skills);
+  lines.push(...skillLines);
+
+  const dpsKeys = ['TotalDPS', 'CombinedDPS', 'FullDPS', 'MinionTotalDPS', 'MinionCombinedDPS'];
+  const hasDps = dpsKeys.some(key => statIsPresent(stats[key]));
+  const hasTotems = statIsPresent(stats.ActiveTotemLimit);
+
+  if (hasDps || hasTotems) {
+    lines.push('');
+    lines.push('**DPS Context:**');
+    if (statIsPresent(stats.TotalDPS)) {
+      lines.push('TotalDPS: PoB active skill damage metric; do not assume this is whole-build DPS for totems, minions, or multi-skill setups.');
+    }
+    if (statIsPresent(stats.CombinedDPS)) {
+      lines.push('CombinedDPS: PoB combined metric for the selected active skill when available.');
+    }
+    if (statIsPresent(stats.FullDPS)) {
+      lines.push('FullDPS: PoB aggregate across skill groups marked as included in Full DPS; prefer this for multi-source setups after checking group inclusion.');
+    }
+    if (statIsPresent(stats.MinionTotalDPS) || statIsPresent(stats.MinionCombinedDPS)) {
+      lines.push('Minion DPS fields are separate from player skill DPS; avoid adding them blindly without confirming build mechanics.');
+    }
+    if (hasTotems) {
+      lines.push(`Totem context: ActiveTotemLimit=${stats.ActiveTotemLimit}; verify whether TotalDPS is per active skill/totem convention or use FullDPS when configured.`);
+    }
+  }
+
+  lines.push('');
+  return lines;
+}
+
 export async function handleLuaStart(context: LuaHandlerContext) {
   return wrapHandler('start Lua bridge', async () => {
     await context.ensureLuaClient();
@@ -249,9 +324,19 @@ export async function handleLuaGetStats(context: LuaHandlerContext, category?: s
     const textLines: string[] = ['=== PoB Calculated Stats ===', ''];
 
     if (stats && typeof stats === 'object') {
+      let skills: any;
+      if (!category || category === 'all' || category === 'offense') {
+        try {
+          skills = await luaClient.getSkills();
+        } catch {
+          // Skill context is advisory only; stats should still be returned.
+        }
+      }
+
+      textLines.push(...buildStatsMetadataLines(stats, category, skills));
+
       // Filter out zero/null/undefined values to reduce noise
-      const nonZero = (v: unknown) => v != null && v !== 0 && v !== '0';
-      const entries = Object.entries(stats).filter(([, v]) => nonZero(v));
+      const entries = Object.entries(stats).filter(([key, value]) => statIsDisplayableEntry(key, value));
 
       // Group by offense/defense if showing all
       if (!category || category === 'all') {
@@ -538,7 +623,10 @@ export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes
     const addedCount  = addNodes?.length ?? 0;
     const removedCount = removeNodes?.length ?? 0;
 
-    let text = `✅ Tree delta applied.\n`;
+    let text = `⚠️ STATEFUL TREE MUTATION\n`;
+    text += `This tool modifies the currently loaded passive tree. It is not an isolated what-if calculator and does not return an undo token.\n`;
+    text += `Use suggest_optimal_nodes for measured passive ranking, or call lua_reload_build after inspection to restore the build from disk.\n\n`;
+    text += `✅ Tree delta applied.\n`;
     if (addedCount)    text += `  Added: ${addedCount} node(s)\n`;
     if (removedCount)  text += `  Removed: ${removedCount} node(s)\n`;
     text += `  Total allocated: ${actualCount} nodes\n`;
