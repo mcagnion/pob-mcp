@@ -1,4 +1,6 @@
 import type { PoBLuaApiClient } from "../pobLuaBridge.js";
+import fs from "fs/promises";
+import path from "path";
 import { wrapHandler } from "../utils/errorHandling.js";
 
 export interface JewelAdvisorContext {
@@ -7,75 +9,142 @@ export interface JewelAdvisorContext {
 }
 
 interface WatchersEyeMod {
+  id: string;
   mod: string;
   tier: 'S' | 'A' | 'B';
   note: string;
 }
 
-// Watcher's Eye mods indexed by aura name
-const WATCHERS_EYE_MODS: Record<string, WatchersEyeMod[]> = {
-  Hatred: [
-    { mod: 'Penetrate X% Cold Resistance while affected by Hatred', tier: 'S', note: 'Best-in-slot for cold damage builds' },
-    { mod: 'Gain X% of Cold Damage as Extra Chaos while affected by Hatred', tier: 'A', note: 'Chaos conversion amplifier' },
-    { mod: 'X% increased Cold Damage while affected by Hatred', tier: 'B', note: 'Flat cold damage increase' },
-  ],
-  Anger: [
-    { mod: 'Penetrate X% Fire Resistance while affected by Anger', tier: 'S', note: 'Best-in-slot for fire damage builds' },
-    { mod: 'Gain X% of Fire Damage as Extra Chaos while affected by Anger', tier: 'A', note: 'Chaos conversion amplifier' },
-    { mod: 'X% increased Fire Damage while affected by Anger', tier: 'B', note: 'Flat fire damage increase' },
-  ],
-  Wrath: [
-    { mod: 'Penetrate X% Lightning Resistance while affected by Wrath', tier: 'S', note: 'Best-in-slot for lightning builds' },
-    { mod: 'Gain X% of Lightning Damage as Extra Chaos while affected by Wrath', tier: 'A', note: 'Chaos conversion amplifier' },
-    { mod: 'X% increased Lightning Damage while affected by Wrath', tier: 'B', note: 'Flat lightning damage increase' },
-  ],
-  Precision: [
-    { mod: 'X% increased Critical Strike Chance while affected by Precision', tier: 'S', note: 'Best crit scaling for attack builds' },
-    { mod: 'X% of Physical Attack Damage Leeched as Life while affected by Precision', tier: 'A', note: 'Strong sustain for attack builds' },
-    { mod: 'Gain X% of Physical Damage as Extra Lightning while affected by Precision', tier: 'B', note: 'Damage conversion' },
-  ],
-  Grace: [
-    { mod: 'X% chance to Dodge Attack Hits while affected by Grace', tier: 'S', note: 'Huge avoidance for evasion builds' },
-    { mod: 'Unaffected by Bleeding while affected by Grace', tier: 'A', note: 'Frees up a flask slot' },
-    { mod: 'X% increased Evasion Rating while affected by Grace', tier: 'B', note: 'More evasion stacking' },
-  ],
-  Determination: [
-    { mod: 'X% of Armour applies to Chaos Damage taken while affected by Determination', tier: 'S', note: 'Incredible for armour-stacking builds' },
-    { mod: 'Recover X% of Life when you Block while affected by Determination', tier: 'A', note: 'Good for block builds' },
-    { mod: 'X% increased Armour while affected by Determination', tier: 'B', note: 'More armour stacking' },
-  ],
-  Zealotry: [
-    { mod: 'Consecrated Ground you create while affected by Zealotry grants X% increased Spell Damage', tier: 'S', note: 'Best for spell caster builds' },
-    { mod: 'Spells have X% increased Critical Strike Chance while affected by Zealotry', tier: 'A', note: 'Strong crit scaling for spell builds' },
-  ],
-  Discipline: [
-    { mod: 'X% of Damage taken from Hits is Energy Shield before Life while affected by Discipline', tier: 'S', note: 'Massive defensive layer for ES builds' },
-    { mod: 'Gain X Energy Shield when you Block while affected by Discipline', tier: 'S', note: 'Essential for ES block builds' },
-    { mod: 'Recover X% of Energy Shield when you use a Flask while affected by Discipline', tier: 'A', note: 'Flask synergy for ES builds' },
-  ],
-  Malevolence: [
-    { mod: 'Regenerate X Life per second for each Debuff on Enemies while affected by Malevolence', tier: 'A', note: 'Sustain for DoT builds' },
-    { mod: 'X% increased Damage over Time while affected by Malevolence', tier: 'A', note: 'Generic DoT scaling' },
-  ],
-  Haste: [
-    { mod: 'X% increased Attack Speed while affected by Haste', tier: 'A', note: 'Attack speed stacking' },
-    { mod: 'X% increased Cast Speed while affected by Haste', tier: 'A', note: 'Cast speed scaling' },
-  ],
-  Purity_of_Elements: [
-    { mod: 'Unaffected by Elemental Ailments while affected by Purity of Elements', tier: 'S', note: 'Frees up all ailment flask slots' },
-  ],
-};
+interface WatchersEyeData {
+  modsByAura: Map<string, WatchersEyeMod[]>;
+  source: string;
+}
 
-const KNOWN_AURA_NAMES = new Set(Object.keys(WATCHERS_EYE_MODS));
+const TIER_ORDER: Record<WatchersEyeMod['tier'], number> = { S: 0, A: 1, B: 2 };
 
-function detectActiveAuras(groups: any[]): string[] {
+function normalizeAuraName(name: string): string {
+  return name
+    .replace(/^Vaal\s+/i, '')
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+function unescapeLuaString(value: string): string {
+  return value
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, '\\');
+}
+
+function extractAuraName(mod: string): string | null {
+  const match = mod.match(/while affected by ([A-Za-z ]+)/);
+  return match ? match[1].replace(/\s+/g, ' ').trim() : null;
+}
+
+function classifyWatchersEyeMod(mod: string): Pick<WatchersEyeMod, 'tier' | 'note'> {
+  const lower = mod.toLowerCase();
+  if (
+    lower.includes('damage penetrates') ||
+    lower.includes('critical strike multiplier') ||
+    lower.includes('converted to') ||
+    lower.includes('extra') ||
+    lower.includes('chance to suppress') ||
+    lower.includes('damage taken') ||
+    lower.includes('from hits taken as') ||
+    lower.includes('unaffected by')
+  ) {
+    return { tier: 'S', note: 'High-impact heuristic; verify value, price, and build fit.' };
+  }
+
+  if (
+    lower.includes('increased attack speed') ||
+    lower.includes('increased cast speed') ||
+    lower.includes('critical strike chance') ||
+    lower.includes('leeched') ||
+    lower.includes('block') ||
+    lower.includes('recovery') ||
+    lower.includes('regenerate') ||
+    lower.includes('additional physical damage reduction')
+  ) {
+    return { tier: 'A', note: 'Useful heuristic; validate against current PoB delta.' };
+  }
+
+  return { tier: 'B', note: 'Current PoB mod; situational value depends on build and market.' };
+}
+
+function parseWatchersEyeData(luaSource: string): Map<string, WatchersEyeMod[]> {
+  const modsByAura = new Map<string, WatchersEyeMod[]>();
+
+  for (const line of luaSource.split(/\r?\n/)) {
+    const idMatch = line.match(/\["([^"]+)"\]\s*=/);
+    if (!idMatch) continue;
+
+    const id = idMatch[1];
+    if (id.startsWith('SublimeVision') || id.startsWith('SummonArbalist')) continue;
+
+    const statOrderIndex = line.indexOf(', statOrder');
+    if (statOrderIndex < 0) continue;
+
+    const affixIndex = line.indexOf('affix =');
+    const modSegment = line.slice(affixIndex >= 0 ? affixIndex : 0, statOrderIndex);
+    const strings = [...modSegment.matchAll(/"((?:\\.|[^"\\])*)"/g)]
+      .map(match => unescapeLuaString(match[1]))
+      .filter(value => value.trim().length > 0);
+    if (strings.length === 0) continue;
+
+    const mod = strings.join(' ').replace(/\s+/g, ' ').trim();
+    const aura = extractAuraName(mod);
+    if (!aura) continue;
+
+    const classification = classifyWatchersEyeMod(mod);
+    const mods = modsByAura.get(aura) ?? [];
+    mods.push({ id, mod, ...classification });
+    modsByAura.set(aura, mods);
+  }
+
+  for (const mods of modsByAura.values()) {
+    mods.sort((a, b) => TIER_ORDER[a.tier] - TIER_ORDER[b.tier] || a.mod.localeCompare(b.mod));
+  }
+
+  return modsByAura;
+}
+
+async function loadWatchersEyeData(): Promise<WatchersEyeData | null> {
+  const candidates = [
+    process.env.POB_WATCHERS_EYE_DATA,
+    process.env.POB_FORK_PATH
+      ? path.join(process.env.POB_FORK_PATH, 'Data', 'Uniques', 'Special', 'WatchersEye.lua')
+      : undefined,
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  for (const candidate of candidates) {
+    try {
+      const source = await fs.readFile(candidate, 'utf-8');
+      const modsByAura = parseWatchersEyeData(source);
+      if (modsByAura.size > 0) {
+        return { modsByAura, source: candidate };
+      }
+    } catch {
+      // Try the next configured source.
+    }
+  }
+
+  return null;
+}
+
+function detectActiveAuras(groups: any[], knownAuras: Iterable<string>): string[] {
+  const knownByNormalizedName = new Map<string, string>();
+  for (const aura of knownAuras) {
+    knownByNormalizedName.set(normalizeAuraName(aura), aura);
+  }
+
   const found: string[] = [];
   for (const group of groups) {
     for (const gem of (group.gems ?? [])) {
       const name: string = gem.name || gem || '';
-      if (KNOWN_AURA_NAMES.has(name)) found.push(name);
-      // Handle "Purity of Elements" which has an underscore key
-      if (name === 'Purity of Elements') found.push('Purity_of_Elements');
+      const aura = knownByNormalizedName.get(normalizeAuraName(name));
+      if (aura) found.push(aura);
     }
   }
   return [...new Set(found)];
@@ -89,23 +158,33 @@ export async function handleSuggestWatchersEye(context: JewelAdvisorContext) {
 
   const skills = await luaClient.getSkills();
   const groups: any[] = skills?.groups ?? [];
-  const activeAuras = detectActiveAuras(groups);
+  const data = await loadWatchersEyeData();
 
   let output = "=== Watcher's Eye Recommendations ===\n\n";
 
-  if (activeAuras.length === 0) {
-    output += 'No recognized auras detected in the skill setup.\n';
-    output += 'Ensure auras (Hatred, Anger, Grace, Precision, Discipline, etc.) are in a socket group.\n';
+  if (!data) {
+    output += "Current PoB Watcher's Eye data is unavailable, so static recommendations are suppressed.\n";
+    output += "Set POB_FORK_PATH or POB_WATCHERS_EYE_DATA to a PoB fork containing Data/Uniques/Special/WatchersEye.lua.\n";
     return { content: [{ type: 'text' as const, text: output }] };
   }
 
-  output += `**Active Auras Detected:** ${activeAuras.map(a => a.replace('_', ' ')).join(', ')}\n\n`;
-  output += `A Watcher's Eye rolls mods for 2–3 of your active auras. Aim for S-tier mods across different auras.\n\n`;
+  const activeAuras = detectActiveAuras(groups, data.modsByAura.keys());
+
+  if (activeAuras.length === 0) {
+    output += 'No recognized auras detected in the skill setup.\n';
+    output += 'Ensure active aura gems match current PoB Watcher\'s Eye aura names.\n';
+    return { content: [{ type: 'text' as const, text: output }] };
+  }
+
+  output += `Data source: ${data.source}\n`;
+  output += `Ranking: heuristic S/A/B labels over current PoB mod text; verify exact value ranges, DPS delta, and market price before buying.\n\n`;
+  output += `**Active Auras Detected:** ${activeAuras.join(', ')}\n\n`;
+  output += `A Watcher's Eye rolls mods for 2–3 aura variants. Prefer combinations that are valid in current PoB data and measurable for this build.\n\n`;
 
   for (const aura of activeAuras) {
-    const mods = WATCHERS_EYE_MODS[aura];
+    const mods = data.modsByAura.get(aura);
     if (!mods) continue;
-    output += `### ${aura.replace('_', ' ')}\n`;
+    output += `### ${aura}\n`;
     for (const m of mods) {
       const icon = m.tier === 'S' ? '⭐' : m.tier === 'A' ? '🔷' : '🔹';
       output += `  ${icon} [${m.tier}] ${m.mod}\n`;
@@ -116,7 +195,7 @@ export async function handleSuggestWatchersEye(context: JewelAdvisorContext) {
 
   // Suggest best 2-mod combinations from S-tier mods across different auras
   const sTierByAura = activeAuras
-    .map(a => ({ aura: a.replace('_', ' '), mods: (WATCHERS_EYE_MODS[a] ?? []).filter(m => m.tier === 'S') }))
+    .map(a => ({ aura: a, mods: (data.modsByAura.get(a) ?? []).filter(m => m.tier === 'S') }))
     .filter(x => x.mods.length > 0);
 
   if (sTierByAura.length >= 2) {

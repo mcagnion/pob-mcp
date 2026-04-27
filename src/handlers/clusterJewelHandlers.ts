@@ -601,28 +601,41 @@ function inferClusterArchetype(gemNames: string[]): string[] {
   return tags.length > 0 ? tags : ['generic'];
 }
 
+function getClusterJewelBase(item: any): string {
+  const raw = String(item.raw || '');
+  const candidates = [
+    item.baseName,
+    item.base,
+    item.type,
+    raw.match(/^(Large|Medium|Small) Cluster Jewel$/m)?.[0],
+  ];
+  return String(candidates.find(Boolean) || '');
+}
+
+function isClusterJewelItem(item: any): boolean {
+  const base = getClusterJewelBase(item);
+  const raw = String(item.raw || '');
+  return (
+    base.includes('Cluster Jewel') ||
+    raw.includes('Large Cluster Jewel') ||
+    raw.includes('Medium Cluster Jewel') ||
+    raw.includes('Small Cluster Jewel')
+  );
+}
+
 export async function handleAnalyzeBuildClusterJewels(context: ClusterJewelBuildContext) {
   await context.ensureLuaClient();
   const luaClient = context.getLuaClient();
   if (!luaClient) throw new Error('Lua bridge not active. Use lua_load_build first.');
 
   const items = await luaClient.getItems();
-  const clusterJewels = (items as any[]).filter((item: any) => {
-    const base: string = item.base || '';
-    return (
-      (base.includes('Cluster Jewel') ||
-       base.includes('Large Jewel') ||
-       base.includes('Medium Jewel') ||
-       base.includes('Small Jewel')) &&
-      item.slot && String(item.slot).toLowerCase().includes('jewel')
-    );
-  });
+  const clusterJewels = (items as any[]).filter(isClusterJewelItem);
 
   if (clusterJewels.length === 0) {
     return {
       content: [{
         type: 'text' as const,
-        text: '=== Cluster Jewel Analysis ===\n\nNo cluster jewels detected in equipped items.\nEnsure a build with cluster jewels is loaded.',
+        text: `=== Cluster Jewel Analysis ===\n\nScanned ${Array.isArray(items) ? items.length : 0} active item slots from the Lua bridge.\nNo cluster jewels detected. Ensure a build with tree-socketed cluster jewels is loaded.`,
       }],
     };
   }
@@ -636,12 +649,14 @@ export async function handleAnalyzeBuildClusterJewels(context: ClusterJewelBuild
   const archetypeTags = inferClusterArchetype(gemNames);
 
   let output = '=== Cluster Jewel Analysis ===\n';
+  output += `Scan scope: ${clusterJewels.length} cluster jewel(s) found in ${Array.isArray(items) ? items.length : 0} active item slots from Lua get_items.\n`;
   output += `**Build Archetype Tags:** ${archetypeTags.join(', ')}\n\n`;
 
   for (const jewel of clusterJewels) {
     const raw: string = jewel.raw || '';
-    output += `### ${jewel.name || jewel.base} (${jewel.slot})\n`;
-    output += `Base: ${jewel.base}\n`;
+    const base = getClusterJewelBase(jewel);
+    output += `### ${jewel.name || base} (${jewel.slot || 'tree jewel socket'})\n`;
+    output += `Base: ${base || 'Unknown'}\n`;
 
     // Find any known notable names mentioned in the raw item text
     const foundNotables = Object.keys(CLUSTER_NOTABLE_TAGS).filter(n => raw.includes(n));

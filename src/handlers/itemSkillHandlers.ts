@@ -39,30 +39,42 @@ export async function handleAddItem(
   });
 }
 
-// Known non-mod trailer lines that appear after mods in PoB raw item text
-const ITEM_TRAILER_LINES = new Set([
+// Known non-mod flag/trailer lines that appear in PoB raw item text.
+const ITEM_FLAG_LINES = new Set([
   'Corrupted', 'Fractured Item', 'Mirrored', 'Split', 'Synthesised Item',
   'Veiled Prefix', 'Veiled Suffix', 'Elder Item', 'Shaper Item',
   'Warlord Item', 'Crusader Item', 'Redeemer Item', 'Hunter Item',
+  'Searing Exarch Item', 'Eater of Worlds Item',
 ]);
 
 interface ModLine { line: string; type: string; }
+interface ParsedItemRaw { mods: ModLine[]; flags: string[]; }
 
 /**
- * Parse PoB internal item raw text to extract mod lines.
+ * Parse PoB internal item raw text to extract mod lines and item-source flags.
  * Handles both formats: with and without "Rarity:" prefix.
  * After "Implicits: N", lines are mods — first N are implicit, rest explicit.
  */
-function parseItemRawMods(raw: string | undefined): ModLine[] {
-  if (!raw) return [];
+function parseItemRaw(raw: string | undefined): ParsedItemRaw {
+  if (!raw) return { mods: [], flags: [] };
   const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
   const mods: ModLine[] = [];
+  const flags: string[] = [];
+  const seenFlags = new Set<string>();
   let implicitTotal = 0;
   let pastImplicitsLine = false;
   let enchantCount = 0;
   let implicitCount = 0;
 
   for (const rawLine of lines) {
+    if (ITEM_FLAG_LINES.has(rawLine)) {
+      if (!seenFlags.has(rawLine)) {
+        flags.push(rawLine);
+        seenFlags.add(rawLine);
+      }
+      continue;
+    }
+
     const implicitsMatch = rawLine.match(/^Implicits:\s*(\d+)/);
     if (implicitsMatch) {
       implicitTotal = parseInt(implicitsMatch[1], 10);
@@ -70,7 +82,6 @@ function parseItemRawMods(raw: string | undefined): ModLine[] {
       continue;
     }
     if (!pastImplicitsLine) continue;
-    if (ITEM_TRAILER_LINES.has(rawLine)) continue;
     // Skip any remaining spec lines that sneak in (e.g. "Note: ...")
     if (/^[A-Z][A-Za-z ]+:\s/.test(rawLine) && !/^[+\-\d]/.test(rawLine)) continue;
 
@@ -111,7 +122,7 @@ function parseItemRawMods(raw: string | undefined): ModLine[] {
 
     mods.push({ line: displayLine, type });
   }
-  return mods;
+  return { mods, flags };
 }
 
 export async function handleGetEquippedItems(context: ItemSkillHandlerContext) {
@@ -147,7 +158,11 @@ export async function handleGetEquippedItems(context: ItemSkillHandlerContext) {
           if (item.active !== undefined) {
             text += `  Active: ${item.active ? 'Yes' : 'No'}\n`;
           }
-          const mods = parseItemRawMods(item.raw);
+          const parsed = parseItemRaw(item.raw);
+          if (parsed.flags.length > 0) {
+            text += `  Flags: ${parsed.flags.join(' | ')}\n`;
+          }
+          const mods = parsed.mods;
           if (mods.length > 0) {
             const enchants = mods.filter(m => m.type === 'enchant');
             const implicits = mods.filter(m => m.type === 'implicit');
