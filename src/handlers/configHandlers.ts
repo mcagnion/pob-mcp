@@ -57,13 +57,13 @@ export async function handleLoadConfigPreset(context: ConfigPresetContext, name:
     throw new Error(`Preset "${name}" not found. Use save_config_preset to create it first.`);
   }
 
-  await luaClient.setConfig(config);
-
+  const result = await luaClient.setConfig(config);
+  let text = `✅ Config preset "${name}" loaded (${result.appliedKeys.length} settings applied).`;
+  if (result.ignoredKeys.length > 0) {
+    text += `\n⚠️ ${result.ignoredKeys.length} key(s) ignored (unknown to PoB ConfigOptions): ${result.ignoredKeys.join(', ')}`;
+  }
   return {
-    content: [{
-      type: 'text' as const,
-      text: `✅ Config preset "${name}" loaded (${Object.keys(config).length} settings applied).`,
-    }],
+    content: [{ type: 'text' as const, text }],
   };
   });
 }
@@ -134,13 +134,24 @@ export async function handleSetConfig(
   // Set new value - build params object dynamically
   const params: Record<string, any> = {};
   params[args.config_name] = args.value;
-  await luaClient.setConfig(params);
+  const result = await luaClient.setConfig(params);
+
+  if (result.ignoredKeys.includes(args.config_name)) {
+    throw new Error(
+      `set_config: "${args.config_name}" is not a known PoB config var ` +
+      `(see src/Modules/ConfigOptions.lua). The value was NOT applied.`
+    );
+  }
 
   // Get updated stats
   const newStats = await luaClient.getStats(['TotalDPS', 'CombinedDPS', 'Life', 'EnergyShield']);
 
+  const appliedKey = result.aliasedKeys[args.config_name] || args.config_name;
   let output = `=== Configuration Updated ===\n\n`;
-  output += `${args.config_name}:\n`;
+  output += `${appliedKey}:\n`;
+  if (appliedKey !== args.config_name) {
+    output += `  (alias: requested "${args.config_name}", applied as "${appliedKey}")\n`;
+  }
   output += `  Old Value: ${formatValue(oldValue)}\n`;
   output += `  New Value: ${formatValue(args.value)}\n\n`;
 
@@ -221,13 +232,17 @@ export async function handleSetEnemyStats(
   }
 
   // Apply changes
-  await luaClient.setConfig(params);
+  const result = await luaClient.setConfig(params);
 
   // Get updated stats
   const newStats = await luaClient.getStats(['TotalDPS', 'CombinedDPS', 'Life', 'EnergyShield']);
 
   // Format output
   let output = `=== Enemy Configuration Updated ===\n\n`;
+
+  if (result.ignoredKeys.length > 0) {
+    output += `⚠️ Ignored (unknown PoB config vars): ${result.ignoredKeys.join(', ')}\n\n`;
+  }
 
   for (const change of changesSummary) {
     const suffix = change.key.includes("Resist") ? "%" : "";

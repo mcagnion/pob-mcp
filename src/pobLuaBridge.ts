@@ -362,10 +362,20 @@ async setTree(params: {
     return res.config;
   }
 
-  async setConfig(params: Record<string, any>): Promise<any> {
+  async setConfig(params: Record<string, any>): Promise<{
+    config: any;
+    appliedKeys: string[];
+    aliasedKeys: Record<string, string>;
+    ignoredKeys: string[];
+  }> {
     const res = await this.send({ action: "set_config", params });
     if (!res.ok) throw new Error(res.error || "set_config failed");
-    return res.config;
+    return {
+      config: res.config,
+      appliedKeys: Array.isArray(res.appliedKeys) ? res.appliedKeys : [],
+      aliasedKeys: (res.aliasedKeys && typeof res.aliasedKeys === 'object' ? res.aliasedKeys : {}) as Record<string, string>,
+      ignoredKeys: Array.isArray(res.ignoredKeys) ? res.ignoredKeys : [],
+    };
   }
 
   async createSocketGroup(params?: { label?: string; slot?: string; enabled?: boolean; includeInFullDPS?: boolean }): Promise<any> {
