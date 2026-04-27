@@ -15,6 +15,22 @@ export interface OptimizationHandlerContext {
   ensureLuaClient: () => Promise<void>;
 }
 
+interface ScoredLifeNode {
+  node: any;
+  lifeDelta: number;
+  lifeAfter: number;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : null;
+}
+
+function formatSignedInteger(value: number): string {
+  const rounded = Math.round(value);
+  return `${rounded > 0 ? '+' : ''}${rounded.toLocaleString()}`;
+}
+
 export async function handleAnalyzeDefenses(
   context: OptimizationHandlerContext,
   buildName?: string
@@ -239,6 +255,68 @@ export async function handleSuggestOptimalNodes(
     if (uniqueNodes.length === 0) {
       text += `No unallocated nodes found matching "${goalString}".\n`;
       text += `Try a different goal: damage, defense, life, es, resist, speed\n`;
+    } else if (goal === 'life') {
+      const baseLife = asFiniteNumber(stats.Life);
+      const scoredNodes: ScoredLifeNode[] = [];
+      let skippedNodes = 0;
+
+      if (baseLife !== null) {
+        for (const node of uniqueNodes) {
+          const nodeId = asFiniteNumber(node.id);
+          if (nodeId === null) {
+            skippedNodes++;
+            continue;
+          }
+
+          try {
+            const output = await luaClient.calcWith({ addNodes: [nodeId] });
+            const lifeAfter = asFiniteNumber(output?.Life);
+            if (lifeAfter === null) {
+              skippedNodes++;
+              continue;
+            }
+
+            const lifeDelta = lifeAfter - baseLife;
+            if (lifeDelta > 0) {
+              scoredNodes.push({ node, lifeDelta, lifeAfter });
+            }
+          } catch {
+            skippedNodes++;
+          }
+        }
+      }
+
+      scoredNodes.sort((a, b) => b.lifeDelta - a.lifeDelta);
+      const topNodes = scoredNodes.slice(0, points);
+
+      text += `**Recommended Nodes (ranked by calcWith Life delta):**\n`;
+      text += `Evaluated ${uniqueNodes.length} candidate nodes`;
+      if (skippedNodes > 0) {
+        text += `, skipped ${skippedNodes} that could not be simulated`;
+      }
+      text += `.\n\n`;
+
+      if (baseLife === null) {
+        text += `Cannot rank life nodes because current Life is unavailable from PoB stats.\n`;
+      } else if (topNodes.length === 0) {
+        text += `No candidate produced a positive Life delta. Keyword matches were not shown as recommendations.\n`;
+      } else {
+        for (const { node, lifeDelta, lifeAfter } of topNodes) {
+          const typeTag = node.type === 'keystone' ? ' [KEYSTONE]' : node.type === 'notable' ? ' [Notable]' : '';
+          text += `**${node.name}**${typeTag}\n`;
+          text += `  Node ID: ${node.id}\n`;
+          text += `  Life Δ: ${formatSignedInteger(lifeDelta)} (to ${Math.round(lifeAfter).toLocaleString()})\n`;
+          if (node.stats && node.stats.length > 0) {
+            for (const stat of node.stats.slice(0, 3)) {
+              text += `  - ${stat}\n`;
+            }
+          }
+          text += '\n';
+        }
+      }
+
+      text += `\n💡 Use get_nearby_nodes to find nodes reachable from your current tree.\n`;
+      text += `💡 Use lua_set_tree with updated node IDs to apply changes.\n`;
     } else {
       text += `**Recommended Nodes (top ${Math.min(uniqueNodes.length, points)} unallocated):**\n\n`;
       for (const node of uniqueNodes.slice(0, points)) {
