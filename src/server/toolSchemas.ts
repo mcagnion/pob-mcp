@@ -1604,7 +1604,7 @@ export function getBuildGoalsToolSchemas(): any[] {
     },
     {
       name: "suggest_watchers_eye",
-      description: "Recommend valuable Watcher's Eye jewel mods based on the build's active auras, ranked by tier (S/A/B) with best combo suggestions",
+      description: "Recommend current Watcher's Eye jewel mods from PoB data based on the build's active auras, with heuristic S/A/B labels and combo suggestions",
       inputSchema: {
         type: "object",
         properties: {},
