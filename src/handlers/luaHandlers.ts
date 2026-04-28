@@ -762,12 +762,20 @@ export async function handleSearchTreeNodes(
       countLine += ':';
       textLines.push(countLine, '');
 
+      const allocatedCount = results.nodes.filter((node: any) => Boolean(node.allocated)).length;
+      const unallocatedCount = results.nodes.length - allocatedCount;
+      textLines.push(`Allocation summary: ${allocatedCount} allocated / ${unallocatedCount} unallocated in returned matches`);
+      textLines.push('Allocation status is authoritative for the currently loaded build; do not treat unallocated search hits as active passive effects.');
+      textLines.push('Passive choice guardrail: for mutually exclusive or pick-one choices, inspect every sibling option and cite which result is allocated before making a recommendation.');
+      textLines.push('');
+
       for (const node of results.nodes) {
-        const allocatedTag = node.allocated ? " [ALLOCATED]" : "";
+        const allocatedTag = node.allocated ? " [ALLOCATED]" : " [UNALLOCATED]";
         const typeTag = node.type !== 'normal' ? ` [${node.type.toUpperCase()}]` : "";
 
         textLines.push(`**${node.name}**${typeTag}${allocatedTag}`);
         textLines.push(`  Node ID: ${node.id}`);
+        textLines.push(`  Allocation: ${node.allocated ? 'ACTIVE in current loaded build' : 'NOT allocated in current loaded build'}`);
 
         if (node.ascendancyName) {
           textLines.push(`  Ascendancy: ${node.ascendancyName}`);
