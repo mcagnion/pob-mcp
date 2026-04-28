@@ -1,0 +1,30 @@
+name: MCP Guardrails
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - integration
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify MCP guardrails
+        run: npm run verify:mcp-guardrails
