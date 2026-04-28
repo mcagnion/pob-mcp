@@ -146,6 +146,7 @@ export async function handleSuggestSupportGems(
   }
 
   outputLines.push(`Top ${suggestions.length} Recommendations:`, '');
+  outputLines.push('Verification gates: DPS is heuristic unless marked measured; acquisition and price require current league checks.', '');
 
   for (let i = 0; i < suggestions.length; i++) {
     const suggestion = suggestions[i];
@@ -155,8 +156,14 @@ export async function handleSuggestSupportGems(
       outputLines.push(`   Replaces: ${suggestion.replaces}`);
     }
     outputLines.push(`   Est. DPS Increase: +${suggestion.dpsIncrease.toFixed(1)}%`);
+    outputLines.push(`   Measured: ${suggestion.measured}`);
+    outputLines.push(`   Acquirable: ${suggestion.acquirable}`);
+    outputLines.push(`   Price-checked: ${suggestion.priceChecked ? "yes" : "no"}`);
     outputLines.push(`   Why: ${suggestion.reasoning}`);
-    outputLines.push(`   Cost: ${suggestion.cost}`);
+    outputLines.push(`   Price: ${suggestion.cost}`);
+    for (const note of suggestion.feasibilityNotes) {
+      outputLines.push(`   Note: ${note}`);
+    }
 
     if (suggestion.requires && suggestion.requires.length > 0) {
       outputLines.push(`   Requires: ${suggestion.requires.join(", ")}`);
@@ -319,6 +326,8 @@ export async function handleValidateGemQuality(
       const upgrade = validation.exceptionalUpgrades[i];
       outputLines.push(`${i + 1}. ${upgrade.gem} → ${upgrade.exceptional}`);
       outputLines.push(`   Est. DPS Gain: ${upgrade.dpsGain}`);
+      outputLines.push(`   Acquirable: ${upgrade.acquirable}`);
+      outputLines.push(`   Price-checked: ${upgrade.priceChecked ? "yes" : "no"}`);
     }
     outputLines.push('');
   }
@@ -328,6 +337,7 @@ export async function handleValidateGemQuality(
     for (let i = 0; i < validation.corruptionTargets.length; i++) {
       const target = validation.corruptionTargets[i];
       outputLines.push(`${i + 1}. ${target.gem} (current) → ${target.target} (corrupted)`);
+      outputLines.push(`   Cap: ${target.cap}`);
       outputLines.push(`   Risk: ${target.risk}`);
     }
     outputLines.push('');
@@ -418,13 +428,19 @@ export async function handleFindOptimalLinks(
       stepLine += ` (replace ${suggestion.replaces})`;
     }
     outputLines.push(stepLine);
-    outputLines.push(`Cost: ${suggestion.cost}`);
+    outputLines.push(`Measured: ${suggestion.measured}`);
+    outputLines.push(`Acquirable: ${suggestion.acquirable}`);
+    outputLines.push(`Price-checked: ${suggestion.priceChecked ? "yes" : "no"}`);
+    outputLines.push(`Price: ${suggestion.cost}`);
     outputLines.push(`Est. DPS Increase: +${suggestion.dpsIncrease.toFixed(1)}%`);
+    for (const note of suggestion.feasibilityNotes) {
+      outputLines.push(`Note: ${note}`);
+    }
     outputLines.push('');
   }
 
   outputLines.push('=== Summary ===');
-  outputLines.push(`Total Est. DPS Increase: +${cumulativeDPS.toFixed(1)}%`);
+  outputLines.push(`Total Heuristic DPS Increase: +${cumulativeDPS.toFixed(1)}%`);
 
   if (budget === "league_start") {
     outputLines.push('', '💡 League start setup focuses on easily obtainable gems');
@@ -476,7 +492,10 @@ export async function handleGemUpgradePath(
     currentQuality: number;
     action: string;
     priority: number;
-    costEstimate: string;
+    priceStatus: string;
+    measured: string;
+    acquirable: string;
+    priceChecked: boolean;
     reason: string;
   }
 
@@ -500,7 +519,10 @@ export async function handleGemUpgradePath(
           currentQuality: quality,
           action: `Level to 20 (currently ${level})`,
           priority: (20 - level) * multiplier * (isSupport ? 0.8 : 1.2),
-          costEstimate: 'Free (just level it)',
+          priceStatus: 'self-progression; no market price checked',
+          measured: 'heuristic priority only (not live PoB DPS)',
+          acquirable: 'self-leveling available if the gem can gain experience',
+          priceChecked: false,
           reason: 'Every gem level increases gem power — level gems in inactive weapon swap slots',
         });
       }
@@ -516,7 +538,10 @@ export async function handleGemUpgradePath(
             currentQuality: quality,
             action: `Bring to 20% quality (currently ${quality}%)`,
             priority: (20 - quality) * multiplier * (isSupport ? 0.6 : 0.9),
-            costEstimate: `~${costChaos}c in Gemcutter's Prisms`,
+            priceStatus: "not price-checked; verify current Gemcutter's Prism prices",
+            measured: 'heuristic priority only (not live PoB DPS)',
+            acquirable: 'currency action, not a guaranteed market purchase',
+            priceChecked: false,
             reason: 'Quality bonuses vary by gem and patch — apply quality, then verify the current PoB readback/stat delta',
           });
         }
@@ -531,8 +556,11 @@ export async function handleGemUpgradePath(
           currentQuality: quality,
           action: 'Corrupt for 21/20 (Vaal Orb on 20/20)',
           priority: 15 * multiplier,
-          costEstimate: '25% chance of 21/20, 25% chance brick — buy pre-corrupted 21/20 for safety',
-          reason: 'Level 21 is a significant DPS increase for active gems; corruption is high-risk/reward',
+          priceStatus: 'not price-checked; corruption can add at most +1 level or +3 quality',
+          measured: 'heuristic priority only (not live PoB DPS)',
+          acquirable: 'corruption outcome, not guaranteed',
+          priceChecked: false,
+          reason: 'Level 21 can be valuable for active gems; verify current price before buying a corrupted gem',
         });
       }
 
@@ -543,10 +571,13 @@ export async function handleGemUpgradePath(
           groupLabel: group.label || `Group ${group.index}`,
           currentLevel: level,
           currentQuality: quality,
-          action: `Buy Exceptional ${name.replace(' Support', '')} Support`,
+          action: `Check Exceptional ${name.replace(' Support', '')} Support`,
           priority: 20,
-          costEstimate: 'Varies greatly — check poe.ninja prices',
-          reason: 'Exceptional supports have higher quality bonuses and occasionally better base effects',
+          priceStatus: 'not price-checked; verify current league trade availability before buying',
+          measured: 'heuristic priority only (not live PoB DPS)',
+          acquirable: 'unverified in requested league',
+          priceChecked: false,
+          reason: 'Exceptional support availability is version-sensitive; PoB calc support is not proof of acquisition',
         });
       }
     }
@@ -571,7 +602,10 @@ export async function handleGemUpgradePath(
   for (const u of upgrades.slice(0, 15)) {
     outputLines.push(`**${rank}. ${u.gemName}** (${u.groupLabel})`);
     outputLines.push(`   Action: ${u.action}`);
-    outputLines.push(`   Cost: ${u.costEstimate}`);
+    outputLines.push(`   Measured: ${u.measured}`);
+    outputLines.push(`   Acquirable: ${u.acquirable}`);
+    outputLines.push(`   Price-checked: ${u.priceChecked ? "yes" : "no"}`);
+    outputLines.push(`   Price/availability: ${u.priceStatus}`);
     outputLines.push(`   Why: ${u.reason}`);
     outputLines.push('');
     rank++;
