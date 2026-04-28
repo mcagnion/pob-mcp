@@ -28,7 +28,7 @@ function asFiniteNumber(value: unknown): number | null {
 
 function formatSignedInteger(value: number): string {
   const rounded = Math.round(value);
-  return `${rounded > 0 ? '+' : ''}${rounded.toLocaleString()}`;
+  return `${rounded > 0 ? '+' : ''}${rounded.toLocaleString('en-US')}`;
 }
 
 export async function handleAnalyzeDefenses(
@@ -305,7 +305,7 @@ export async function handleSuggestOptimalNodes(
           const typeTag = node.type === 'keystone' ? ' [KEYSTONE]' : node.type === 'notable' ? ' [Notable]' : '';
           text += `**${node.name}**${typeTag}\n`;
           text += `  Node ID: ${node.id}\n`;
-          text += `  Life Δ: ${formatSignedInteger(lifeDelta)} (to ${Math.round(lifeAfter).toLocaleString()})\n`;
+          text += `  Life Δ: ${formatSignedInteger(lifeDelta)} (to ${Math.round(lifeAfter).toLocaleString('en-US')})\n`;
           if (node.stats && node.stats.length > 0) {
             for (const stat of node.stats.slice(0, 3)) {
               text += `  - ${stat}\n`;
