@@ -404,7 +404,7 @@ export function getLuaToolSchemas(): any[] {
     },
     {
       name: "update_tree_delta",
-      description: "Incrementally add or remove specific passive nodes from the current tree allocation. Automatically finds and includes intermediate path nodes when adding nodes that aren't directly adjacent to the current tree. Safer than lua_set_tree because you only specify the nodes to change, not the entire tree. Note: max 8 ascendancy points allowed.",
+      description: "Preview or apply passive tree allocation changes. By default this asks the PoB bridge to apply the delta, return the resulting tree, and restore the loaded build immediately; set apply=true only when you intentionally want to keep the tree mutation. Note: max 8 ascendancy points allowed.",
       inputSchema: {
         type: "object",
         properties: {
@@ -417,6 +417,10 @@ export function getLuaToolSchemas(): any[] {
             type: "array",
             items: { type: "string" },
             description: "Node IDs to remove from the current allocation",
+          },
+          apply: {
+            type: "boolean",
+            description: "Keep the mutation in the loaded build. Defaults to false, which previews the delta and restores the original tree when the PoB bridge supports restore-after preview.",
           },
         },
       },

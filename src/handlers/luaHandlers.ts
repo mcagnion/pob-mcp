@@ -515,7 +515,7 @@ export async function handleLuaReloadBuild(context: LuaHandlerContext, buildName
   });
 }
 
-export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes?: string[], removeNodes?: string[]) {
+export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes?: string[], removeNodes?: string[], apply?: boolean) {
   return wrapHandler('update tree delta', async () => {
     await context.ensureLuaClient();
     const luaClient = context.getLuaClient();
@@ -525,9 +525,10 @@ export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes
       throw new Error('At least one of add_nodes or remove_nodes must be provided.');
     }
 
-    const params: { addNodes?: number[]; removeNodes?: number[] } = {};
+    const params: { addNodes?: number[]; removeNodes?: number[]; restoreAfter?: boolean } = {};
     if (addNodes?.length)    params.addNodes    = addNodes.map(Number);
     if (removeNodes?.length) params.removeNodes = removeNodes.map(Number);
+    if (apply !== true) params.restoreAfter = true;
 
     const result = await luaClient.updateTreeDelta(params);
     const tree = result?.tree;
@@ -538,10 +539,18 @@ export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes
     const addedCount  = addNodes?.length ?? 0;
     const removedCount = removeNodes?.length ?? 0;
 
-    let text = `✅ Tree delta applied.\n`;
+    let text = result?.restored
+      ? `✅ Tree delta previewed; loaded passive tree restored.\n`
+      : `✅ Tree delta applied.\n`;
+    if (apply !== true && !result?.restored) {
+      text += `⚠️  Requested restore-after preview, but the PoB bridge did not report restoration support. Treat the currently loaded tree as mutated and call lua_reload_build if needed.\n`;
+    }
     if (addedCount)    text += `  Added: ${addedCount} node(s)\n`;
     if (removedCount)  text += `  Removed: ${removedCount} node(s)\n`;
     text += `  Total allocated: ${actualCount} nodes\n`;
+    if (result?.restoredTree?.nodes && Array.isArray(result.restoredTree.nodes)) {
+      text += `  Restored allocation: ${result.restoredTree.nodes.length} nodes\n`;
+    }
 
     if (autoPathedNodes && autoPathedNodes.length > 0) {
       text += `\n🔗 Auto-pathed ${autoPathedNodes.length} intermediate node(s) to maintain connectivity.`;

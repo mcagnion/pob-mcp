@@ -192,7 +192,8 @@ export async function routeToolCall(
       return await handleUpdateTreeDelta(
         luaContext,
         args.add_nodes as string[] | undefined,
-        args.remove_nodes as string[] | undefined
+        args.remove_nodes as string[] | undefined,
+        args.apply as boolean | undefined
       );
 
     case "create_spec":
