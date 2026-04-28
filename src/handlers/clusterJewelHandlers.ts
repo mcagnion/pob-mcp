@@ -623,6 +623,50 @@ function isClusterJewelItem(item: any): boolean {
   );
 }
 
+function normalizeClusterNotableName(name: string): string {
+  return name
+    .replace(/\s+\[.*?\]$/g, '')
+    .replace(/[.,;:]+$/g, '')
+    .trim();
+}
+
+function isClusterNotableName(name: string): boolean {
+  const lowered = name.toLowerCase();
+  return (
+    name.length > 0 &&
+    !lowered.includes('jewel socket') &&
+    !lowered.includes('small passive') &&
+    !lowered.includes('passive skills grant')
+  );
+}
+
+function extractClusterNotableNames(raw: string): string[] {
+  const notables: string[] = [];
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    const matches = [
+      trimmed.match(/^Allocates\s+(.+)$/i),
+      trimmed.match(/^\d+\s+Added Passive Skills?\s+(?:is|are)\s+(.+)$/i),
+    ].filter(Boolean) as RegExpMatchArray[];
+
+    for (const match of matches) {
+      const notable = normalizeClusterNotableName(match[1]);
+      if (isClusterNotableName(notable) && !notables.includes(notable)) {
+        notables.push(notable);
+      }
+    }
+  }
+
+  for (const notable of Object.keys(CLUSTER_NOTABLE_TAGS)) {
+    if (raw.includes(notable) && !notables.includes(notable)) {
+      notables.push(notable);
+    }
+  }
+
+  return notables;
+}
+
 export async function handleAnalyzeBuildClusterJewels(context: ClusterJewelBuildContext) {
   await context.ensureLuaClient();
   const luaClient = context.getLuaClient();
@@ -658,16 +702,19 @@ export async function handleAnalyzeBuildClusterJewels(context: ClusterJewelBuild
     output += `### ${jewel.name || base} (${jewel.slot || 'tree jewel socket'})\n`;
     output += `Base: ${base || 'Unknown'}\n`;
 
-    // Find any known notable names mentioned in the raw item text
-    const foundNotables = Object.keys(CLUSTER_NOTABLE_TAGS).filter(n => raw.includes(n));
+    const foundNotables = extractClusterNotableNames(raw);
 
     if (foundNotables.length > 0) {
       output += `Notables:\n`;
       for (const notable of foundNotables) {
         const tags = CLUSTER_NOTABLE_TAGS[notable] ?? [];
+        const tagLabel = tags.length > 0 ? tags.join(', ') : 'unclassified';
         const relevant = tags.some(t => archetypeTags.includes(t));
-        const icon = relevant ? '✅' : '⚠️';
-        output += `  ${icon} ${notable} [${tags.join(', ')}]${relevant ? '' : ' — may not synergize with your build archetype'}\n`;
+        const icon = tags.length === 0 ? 'ℹ️' : relevant ? '✅' : '⚠️';
+        const note = tags.length === 0
+          ? ' — parsed from item text; no local synergy tags available'
+          : relevant ? '' : ' — may not synergize with your build archetype';
+        output += `  ${icon} ${notable} [${tagLabel}]${note}\n`;
       }
     } else {
       output += `  (Could not parse notables — ensure item raw text contains notable names)\n`;
