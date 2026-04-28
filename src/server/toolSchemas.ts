@@ -695,7 +695,7 @@ export function getLuaToolSchemas(): any[] {
           },
           quality: {
             type: "number",
-            description: "Quality percentage (0-23 for normal, up to 30+ for corrupted)",
+            description: "Quality percentage (0-23). Gem corruption can add at most +3 quality over a 20% gem.",
           },
           quality_type: {
             type: "string",
