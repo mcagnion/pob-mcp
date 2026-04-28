@@ -60,9 +60,19 @@ export interface GemSuggestion {
   reasoning: string;
   cost: string;
   priority: number;
+  measured: string;
+  acquirable: string;
+  priceChecked: boolean;
+  feasibilityNotes: string[];
   requires?: string[];
   conflicts?: string[];
 }
+
+const HEURISTIC_GEM_MEASUREMENT = "heuristic estimate only (not live PoB DPS)";
+const UNVERIFIED_GEM_ACQUISITION = "unverified in requested league";
+const UNCHECKED_GEM_PRICE = false;
+const GEM_CORRUPTION_LEVEL_CAP_INCREASE = 1;
+const GEM_CORRUPTION_QUALITY_CAP_INCREASE = 3;
 
 export class SkillGemService {
   private gemDatabase: Map<string, GemData>;
@@ -171,6 +181,7 @@ export class SkillGemService {
         reasoning: rec.reasoning,
         cost: this.estimateCost(gemData, budget),
         priority: rec.priority,
+        ...this.getFeasibilityLabels(rec.gem),
         requires: gemData.synergies,
         conflicts: gemData.anti_synergies,
       });
@@ -190,6 +201,7 @@ export class SkillGemService {
             reasoning: `Exceptional version provides higher multiplier and bonus at level 5`,
             cost: this.estimateCost(exceptionalData, budget),
             priority: 5,
+            ...this.getFeasibilityLabels(exceptionalName),
           });
         }
       }
@@ -212,15 +224,15 @@ export class SkillGemService {
     options: { includeCorrupted?: boolean } = {}
   ): {
     needsQuality: Array<{ gem: string; current: string; recommended: string; impact: string }>;
-    exceptionalUpgrades: Array<{ gem: string; exceptional: string; dpsGain: string }>;
-    corruptionTargets?: Array<{ gem: string; target: string; risk: string }>;
+    exceptionalUpgrades: Array<{ gem: string; exceptional: string; dpsGain: string; acquirable: string; priceChecked: boolean }>;
+    corruptionTargets?: Array<{ gem: string; target: string; risk: string; cap: string }>;
   } {
     const skills = this.extractSkills(build);
     const allGems = skills.flatMap((s) => s.gems);
 
     const needsQuality: Array<{ gem: string; current: string; recommended: string; impact: string }> = [];
-    const exceptionalUpgrades: Array<{ gem: string; exceptional: string; dpsGain: string }> = [];
-    const corruptionTargets: Array<{ gem: string; target: string; risk: string }> = [];
+    const exceptionalUpgrades: Array<{ gem: string; exceptional: string; dpsGain: string; acquirable: string; priceChecked: boolean }> = [];
+    const corruptionTargets: Array<{ gem: string; target: string; risk: string; cap: string }> = [];
 
     for (const gem of allGems) {
       const name = gem.nameSpec || gem.gemId || "Unknown";
@@ -246,6 +258,8 @@ export class SkillGemService {
           gem: name,
           exceptional: exceptionalName,
           dpsGain: "~8-12%",
+          acquirable: UNVERIFIED_GEM_ACQUISITION,
+          priceChecked: UNCHECKED_GEM_PRICE,
         });
       }
 
@@ -253,8 +267,9 @@ export class SkillGemService {
       if (options.includeCorrupted && level === 20 && quality === 20) {
         corruptionTargets.push({
           gem: name,
-          target: `${level + 1}/${quality + 3}`,
-          risk: "Could brick to 20/20",
+          target: `${level + GEM_CORRUPTION_LEVEL_CAP_INCREASE}/${quality + GEM_CORRUPTION_QUALITY_CAP_INCREASE}`,
+          cap: `Corruption can add at most +${GEM_CORRUPTION_LEVEL_CAP_INCREASE} gem level and +${GEM_CORRUPTION_QUALITY_CAP_INCREASE}% quality.`,
+          risk: "Outcome is not guaranteed; verify current league price before buying a corrupted gem.",
         });
       }
     }
@@ -478,14 +493,27 @@ export class SkillGemService {
    * Estimate gem cost
    */
   private estimateCost(gemData: GemData, budget: string): string {
-    if (gemData.cost_tier === "common") return "~5 Chaos Orbs";
-    if (gemData.cost_tier === "uncommon") return "~20 Chaos Orbs";
-    if (gemData.cost_tier === "rare") return "~5 Divine Orbs";
-    if (gemData.cost_tier === "very_rare") {
-      if (budget === "endgame") return "~50 Divine Orbs";
-      return "~20 Divine Orbs";
+    if (gemData.name.startsWith("Exceptional") || gemData.cost_tier === "very_rare") {
+      return "not price-checked; verify current league trade availability before buying";
     }
-    return "~10 Chaos Orbs";
+    return "not price-checked; verify vendor/drop/trade availability in the requested league";
+  }
+
+  private getFeasibilityLabels(gemName: string): Pick<GemSuggestion, "measured" | "acquirable" | "priceChecked" | "feasibilityNotes"> {
+    const feasibilityNotes = [
+      "PoB calc support does not prove current-league acquisition.",
+    ];
+
+    if (gemName.startsWith("Exceptional")) {
+      feasibilityNotes.push("Exceptional/legacy availability is version-sensitive; check current trade or official gem data.");
+    }
+
+    return {
+      measured: HEURISTIC_GEM_MEASUREMENT,
+      acquirable: UNVERIFIED_GEM_ACQUISITION,
+      priceChecked: UNCHECKED_GEM_PRICE,
+      feasibilityNotes,
+    };
   }
 
   /**
