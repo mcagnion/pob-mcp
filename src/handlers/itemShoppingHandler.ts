@@ -13,6 +13,9 @@ export interface ItemShoppingContext {
   getLuaClient: () => PoBLuaApiClient | null;
 }
 
+const MECHANICS_FRESHNESS_NOTE =
+  'Static slot/base notes can become stale across PoE patches. Verify enchants, Heist/Hillock quality, Harvest, Eldritch, influence, corruption, and Watcher\'s Eye mechanics against current PoB data or live trade filters before treating them as available.';
+
 // Slot-specific knowledge: which mods matter and what the base options are
 const SLOT_KNOWLEDGE: Record<string, {
   label: string;
@@ -49,11 +52,11 @@ const SLOT_KNOWLEDGE: Record<string, {
     suggestedBases: [
       'Hubris Circlet — highest ES base for spell builds',
       'Eternal Burgonet — highest armour base',
-      'Bone Helmet — 40% increased minion damage enchant (minion builds)',
+      'Bone Helmet — minion-themed base; verify current implicit/mod availability before targeting it',
       'Starkonja\'s Head / rare open prefix for elder mods',
     ],
     universalMods: [],
-    notes: 'Check if your skill has a helmet enchantment — it can be a massive damage boost. Enchanted bases command a premium.',
+    notes: 'Helmet enchants and special implicits are version-sensitive. Do not pay a premium for an old Lab/Heist enchant unless current PoB data or live trade filters confirm it exists for the league.',
     tradeFilters: [],
   },
   'Body Armour': {
@@ -159,6 +162,313 @@ function resistLabel(pct: number): string {
   return 'minor';
 }
 
+const ITEM_SOURCE_FLAGS = new Set([
+  'Corrupted', 'Fractured Item', 'Mirrored', 'Split', 'Synthesised Item',
+  'Veiled Prefix', 'Veiled Suffix', 'Elder Item', 'Shaper Item',
+  'Warlord Item', 'Crusader Item', 'Redeemer Item', 'Hunter Item',
+  'Searing Exarch Item', 'Eater of Worlds Item',
+]);
+
+type ItemModType = 'enchant' | 'implicit' | 'explicit' | 'crafted' | 'fractured' | 'scourge' | 'crucible';
+
+interface ParsedItemMod {
+  line: string;
+  type: ItemModType;
+}
+
+interface ParsedCurrentItem {
+  mods: ParsedItemMod[];
+  flags: string[];
+  anoints: string[];
+  hasCraftedMod: boolean;
+  sockets: {
+    total: number;
+    maxLinked: number;
+    summary: string | null;
+  };
+  stats: {
+    life: number;
+    energyShield: number;
+    fireResist: number;
+    coldResist: number;
+    lightningResist: number;
+    chaosResist: number;
+    movementSpeed: number;
+  };
+}
+
+function cleanRawModLine(rawLine: string): { line: string; typeHints: Set<string> } {
+  const typeHints = new Set<string>();
+  const line = rawLine
+    .replace(/\{(\w+)(?::[^}]*)?\}/g, (_m, tag) => {
+      typeHints.add(String(tag));
+      return '';
+    })
+    .replace(/\s*\((implicit|enchant|crafted|fractured)\)\s*$/i, (_m, tag) => {
+      typeHints.add(String(tag).toLowerCase());
+      return '';
+    })
+    .trim();
+
+  return { line, typeHints };
+}
+
+function parseCurrentItem(raw: string | undefined): ParsedCurrentItem | null {
+  if (!raw) return null;
+
+  const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
+  const mods: ParsedItemMod[] = [];
+  const flags: string[] = [];
+  let socketGroups: string[] = [];
+  let implicitTotal = 0;
+  let pastImplicitsLine = false;
+  let implicitCount = 0;
+  let enchantCount = 0;
+
+  for (const rawLine of lines) {
+    const socketsMatch = rawLine.match(/^Sockets:\s*(.+)$/i);
+    if (socketsMatch) {
+      socketGroups = socketsMatch[1].split(/\s+/).filter(Boolean);
+      continue;
+    }
+
+    if (ITEM_SOURCE_FLAGS.has(rawLine)) {
+      flags.push(rawLine);
+      continue;
+    }
+
+    const implicitsMatch = rawLine.match(/^Implicits:\s*(\d+)/i);
+    if (implicitsMatch) {
+      implicitTotal = Number(implicitsMatch[1]);
+      pastImplicitsLine = true;
+      continue;
+    }
+
+    if (!pastImplicitsLine) continue;
+    if (/^[A-Z][A-Za-z ]+:\s/.test(rawLine) && !/^[+\-\d]/.test(rawLine)) continue;
+
+    const { line, typeHints } = cleanRawModLine(rawLine);
+    if (!line) continue;
+
+    const totalSoFar = enchantCount + implicitCount;
+    let type: ItemModType;
+    if (typeHints.has('crafted') && totalSoFar < implicitTotal) {
+      type = 'enchant';
+      enchantCount++;
+    } else if (!typeHints.has('crafted') && totalSoFar < implicitTotal) {
+      type = 'implicit';
+      implicitCount++;
+    } else if (typeHints.has('fractured')) {
+      type = 'fractured';
+    } else if (typeHints.has('scourge')) {
+      type = 'scourge';
+    } else if (typeHints.has('crucible')) {
+      type = 'crucible';
+    } else if (typeHints.has('crafted')) {
+      type = 'crafted';
+    } else {
+      type = 'explicit';
+    }
+
+    mods.push({ line, type });
+  }
+
+  return {
+    mods,
+    flags,
+    anoints: mods.filter(mod => /\bAllocates\b/i.test(mod.line)).map(mod => mod.line),
+    hasCraftedMod: mods.some(mod => mod.type === 'crafted'),
+    sockets: summarizeSocketLayout(socketGroups),
+    stats: summarizeItemStats(mods),
+  };
+}
+
+function summarizeSocketLayout(socketGroups: string[]): ParsedCurrentItem['sockets'] {
+  let total = 0;
+  let maxLinked = 0;
+
+  for (const group of socketGroups) {
+    const socketCount = (group.match(/[RGBW]/gi) ?? []).length;
+    total += socketCount;
+    maxLinked = Math.max(maxLinked, socketCount);
+  }
+
+  if (total === 0) {
+    return { total: 0, maxLinked: 0, summary: null };
+  }
+
+  const socketText = `${total} socket${total === 1 ? '' : 's'}`;
+  const linkText = maxLinked > 1 ? `, ${maxLinked}-link max` : '';
+  return { total, maxLinked, summary: `${socketText}${linkText}` };
+}
+
+function summarizeItemStats(mods: ParsedItemMod[]): ParsedCurrentItem['stats'] {
+  const stats = {
+    life: 0,
+    energyShield: 0,
+    fireResist: 0,
+    coldResist: 0,
+    lightningResist: 0,
+    chaosResist: 0,
+    movementSpeed: 0,
+  };
+
+  for (const mod of mods) {
+    const line = mod.line;
+    const life = line.match(/\+(\d+)\s+to maximum Life/i);
+    if (life) stats.life += Number(life[1]);
+
+    const energyShield = line.match(/\+(\d+)\s+to maximum Energy Shield/i);
+    if (energyShield) stats.energyShield += Number(energyShield[1]);
+
+    const movementSpeed = line.match(/(\d+)% increased Movement Speed/i);
+    if (movementSpeed) stats.movementSpeed = Math.max(stats.movementSpeed, Number(movementSpeed[1]));
+
+    const resist = line.match(/\+(\d+)%\s+to .*Resistances?/i);
+    if (resist) {
+      const amount = Number(resist[1]);
+      const lower = line.toLowerCase();
+      if (lower.includes('all elemental resistances')) {
+        stats.fireResist += amount;
+        stats.coldResist += amount;
+        stats.lightningResist += amount;
+      } else if (lower.includes('all resistances')) {
+        stats.fireResist += amount;
+        stats.coldResist += amount;
+        stats.lightningResist += amount;
+        stats.chaosResist += amount;
+      } else {
+        if (lower.includes('fire')) stats.fireResist += amount;
+        if (lower.includes('cold')) stats.coldResist += amount;
+        if (lower.includes('lightning')) stats.lightningResist += amount;
+        if (lower.includes('chaos')) stats.chaosResist += amount;
+      }
+    }
+  }
+
+  return stats;
+}
+
+function formatStatContributions(currentItem: ParsedCurrentItem): string[] {
+  const stats = currentItem.stats;
+  const lines: string[] = [];
+  if (stats.life > 0) lines.push(`Maximum Life: +${stats.life}`);
+  if (stats.energyShield > 0) lines.push(`Maximum Energy Shield: +${stats.energyShield}`);
+  if (stats.fireResist > 0) lines.push(`Fire Resistance: +${stats.fireResist}%`);
+  if (stats.coldResist > 0) lines.push(`Cold Resistance: +${stats.coldResist}%`);
+  if (stats.lightningResist > 0) lines.push(`Lightning Resistance: +${stats.lightningResist}%`);
+  if (stats.chaosResist > 0) lines.push(`Chaos Resistance: +${stats.chaosResist}%`);
+  if (stats.movementSpeed > 0) lines.push(`Movement Speed: ${stats.movementSpeed}%`);
+  return lines;
+}
+
+function formatCurrentItemDiagnosis(currentItem: ParsedCurrentItem | null): string {
+  if (!currentItem) {
+    return [
+      '## Current Item Diagnosis',
+      '- Current item raw mods are unavailable; recommendations are based on build gaps only.',
+      '- Do not assume open prefixes/suffixes or current affix weaknesses from this output.',
+      '',
+    ].join('\n');
+  }
+
+  const lines: string[] = ['## Current Item Diagnosis'];
+  if (currentItem.mods.length > 0) {
+    lines.push('- Relevant current mods:');
+    for (const mod of currentItem.mods) {
+      const tag = mod.type !== 'explicit' ? ` [${mod.type}]` : '';
+      lines.push(`  - ${mod.line}${tag}`);
+    }
+  } else {
+    lines.push('- No parseable current mods were exposed by the Lua item text.');
+  }
+
+  const contributions = formatStatContributions(currentItem);
+  if (contributions.length > 0) {
+    lines.push('- Parsed current item contributions:');
+    for (const contribution of contributions) {
+      lines.push(`  - ${contribution}`);
+    }
+  }
+
+  if (currentItem.sockets.summary) {
+    lines.push('- Current socket/link layout:');
+    lines.push(`  - ${currentItem.sockets.summary}`);
+  }
+
+  const constraints: string[] = [];
+  if (currentItem.flags.length > 0) constraints.push(...currentItem.flags);
+  if (currentItem.anoints.length > 0) constraints.push(`Anointed/allocated notable: ${currentItem.anoints.join(' | ')}`);
+  if (currentItem.hasCraftedMod) constraints.push('Crafted mod already present');
+
+  if (constraints.length > 0) {
+    lines.push('- Constraints and provenance:');
+    for (const constraint of constraints) {
+      lines.push(`  - ${constraint}`);
+    }
+  }
+
+  if (currentItem.flags.includes('Corrupted') || currentItem.flags.includes('Mirrored')) {
+    lines.push('- Crafting space: current item is corrupted/mirrored, so regular bench crafting should not be assumed.');
+  } else if (currentItem.hasCraftedMod) {
+    lines.push('- Crafting space: current item already has a crafted mod; do not assume another bench craft is available.');
+  } else {
+    lines.push('- Crafting space: open prefixes/suffixes are not exposed by the Lua item text; verify before planning a bench craft.');
+  }
+
+  lines.push('');
+  return lines.join('\n');
+}
+
+function formatReplacementGuardrails(
+  slot: string,
+  currentItem: ParsedCurrentItem | null,
+  currentItemRarity: string | null
+): string {
+  const lines: string[] = [
+    '## Replacement Guardrails',
+    '- Treat the filters below as search criteria, not an instruction to replace the equipped item blindly.',
+  ];
+
+  if (currentItemRarity?.toLowerCase() === 'unique') {
+    lines.push('- Current item is Unique; verify unique-only mechanics or build-enabling modifiers before replacing it with a rare stat stack.');
+  }
+
+  if (!currentItem) {
+    lines.push('- Current item raw mods are unavailable, so preserve any build-specific mechanics manually when comparing candidates.');
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  const specialFlags = currentItem.flags.filter(flag => !['Corrupted', 'Mirrored'].includes(flag));
+  if (specialFlags.length > 0) {
+    lines.push(`- Preserve or deliberately replace special item source flags: ${specialFlags.join(', ')}.`);
+  }
+  if (currentItem.flags.includes('Corrupted') || currentItem.flags.includes('Mirrored')) {
+    lines.push('- Current item is corrupted/mirrored; replacement candidates are usually the only practical upgrade path unless the current item is already final.');
+  }
+  if (currentItem.anoints.length > 0) {
+    lines.push(`- Preserve the allocated notable or price replacement candidates with the same anoint: ${currentItem.anoints.join(' | ')}.`);
+  }
+  if (currentItem.hasCraftedMod) {
+    lines.push('- Current item uses a crafted mod; compare candidates after accounting for their craft availability, not just listed explicit stats.');
+  }
+  if (currentItem.sockets.maxLinked >= 5) {
+    lines.push(`- Preserve socket/link requirements: current ${slot} has ${currentItem.sockets.summary}; do not treat a lower-link candidate as equivalent.`);
+  }
+
+  if (lines.length === 2) {
+    lines.push('- No unique, corruption, anoint, special-source, craft, or 5-link+ blocker was detected from Lua item text; still validate build-specific mechanics in PoB.');
+  }
+
+  lines.push('');
+  return lines.join('\n');
+}
+
+function shouldSuggestCurrentSlotStat(currentValue: number, strongThreshold: number): boolean {
+  return currentValue < strongThreshold;
+}
+
 export async function handleFindItemUpgrades(
   context: ItemShoppingContext,
   args: {
@@ -177,6 +487,7 @@ export async function handleFindItemUpgrades(
     let currentItemName: string | null = null;
     let currentItemBase: string | null = null;
     let currentItemRarity: string | null = null;
+    let currentItemAnalysis: ParsedCurrentItem | null = null;
 
     let life = 0;
     let es = 0;
@@ -232,8 +543,9 @@ export async function handleFindItemUpgrades(
           : null;
         if (equipped) {
           currentItemName = equipped.name ?? equipped.title ?? null;
-          currentItemBase = equipped.base ?? null;
+          currentItemBase = equipped.base ?? equipped.baseName ?? equipped.type ?? null;
           currentItemRarity = equipped.rarity ?? null;
+          currentItemAnalysis = parseCurrentItem(equipped.raw);
         }
       } catch { /* items unavailable */ }
     }
@@ -268,6 +580,11 @@ export async function handleFindItemUpgrades(
     }
 
     text += '\n';
+    if (currentItemName || currentItemBase) {
+      text += formatCurrentItemDiagnosis(currentItemAnalysis);
+      text += formatReplacementGuardrails(slot, currentItemAnalysis, currentItemRarity);
+    }
+    text += `## Mechanics Freshness\n- ${MECHANICS_FRESHNESS_NOTE}\n\n`;
 
     // --- BUILD GAPS ---
     const gaps: string[] = [];
@@ -300,10 +617,19 @@ export async function handleFindItemUpgrades(
 
     // Resistance mods based on gaps
     const resMods: string[] = [];
-    if (fireMissing >= 10) resMods.push(`+${fireMissing + 5}–${fireMissing + 20}% to Fire Resistance`);
-    if (coldMissing >= 10) resMods.push(`+${coldMissing + 5}–${coldMissing + 20}% to Cold Resistance`);
-    if (lightningMissing >= 10) resMods.push(`+${lightningMissing + 5}–${lightningMissing + 20}% to Lightning Resistance`);
-    if (chaosResist < 0) resMods.push(`+${Math.abs(chaosResist) + 10}–${Math.abs(chaosResist) + 30}% to Chaos Resistance`);
+    const currentStats = currentItemAnalysis?.stats;
+    if (fireMissing >= 10 && shouldSuggestCurrentSlotStat(currentStats?.fireResist ?? 0, 25)) {
+      resMods.push(`+${fireMissing + 5}–${fireMissing + 20}% to Fire Resistance`);
+    }
+    if (coldMissing >= 10 && shouldSuggestCurrentSlotStat(currentStats?.coldResist ?? 0, 25)) {
+      resMods.push(`+${coldMissing + 5}–${coldMissing + 20}% to Cold Resistance`);
+    }
+    if (lightningMissing >= 10 && shouldSuggestCurrentSlotStat(currentStats?.lightningResist ?? 0, 25)) {
+      resMods.push(`+${lightningMissing + 5}–${lightningMissing + 20}% to Lightning Resistance`);
+    }
+    if (chaosResist < 0 && shouldSuggestCurrentSlotStat(currentStats?.chaosResist ?? 0, 20)) {
+      resMods.push(`+${Math.abs(chaosResist) + 10}–${Math.abs(chaosResist) + 30}% to Chaos Resistance`);
+    }
 
     if (resMods.length > 0) {
       for (const mod of resMods) text += `- ${mod}\n`;
@@ -312,17 +638,29 @@ export async function handleFindItemUpgrades(
     // Defence mods
     if (!lifeGood) {
       if (isESBuild) {
-        text += `- +80–120 to Maximum Energy Shield\n`;
-        text += `- % increased Energy Shield\n`;
+        if (shouldSuggestCurrentSlotStat(currentStats?.energyShield ?? 0, 80)) {
+          text += `- +80–120 to Maximum Energy Shield\n`;
+          text += `- % increased Energy Shield\n`;
+        } else {
+          text += `- Current item already has +${currentStats?.energyShield} Energy Shield; replace only for higher total ES or stronger secondary mods\n`;
+        }
       } else {
-        text += `- +80–120 to Maximum Life\n`;
+        if (shouldSuggestCurrentSlotStat(currentStats?.life ?? 0, 70)) {
+          text += `- +80–120 to Maximum Life\n`;
+        } else {
+          text += `- Maximum Life already present on current item (+${currentStats?.life}); solve remaining life gap in other slots unless replacing with a stronger total item\n`;
+        }
       }
     } else {
       // Already fine — still suggest it as a secondary improvement
       if (isESBuild) {
-        text += `- Additional Energy Shield (build is fine but more is always better)\n`;
+        if (shouldSuggestCurrentSlotStat(currentStats?.energyShield ?? 0, 80)) {
+          text += `- Additional Energy Shield (build is fine but more is always better)\n`;
+        }
       } else {
-        text += `- Additional Life (build is fine but more is always better)\n`;
+        if (shouldSuggestCurrentSlotStat(currentStats?.life ?? 0, 70)) {
+          text += `- Additional Life (build is fine but more is always better)\n`;
+        }
       }
     }
 
@@ -333,6 +671,20 @@ export async function handleFindItemUpgrades(
     if (priority === 'defense') {
       text += `- Armour, Evasion, or Energy Shield (whichever matches your defensive layer)\n`;
       text += `- Block chance (if using a shield)\n`;
+    }
+
+    if (!slotInfo.universalMods.length && resMods.length === 0 && priority !== 'dps' && priority !== 'defense') {
+      const alreadyCovered = currentItemAnalysis && (
+        currentItemAnalysis.stats.life >= 70 ||
+        currentItemAnalysis.stats.energyShield >= 80 ||
+        currentItemAnalysis.stats.fireResist >= 25 ||
+        currentItemAnalysis.stats.coldResist >= 25 ||
+        currentItemAnalysis.stats.lightningResist >= 25 ||
+        currentItemAnalysis.stats.chaosResist >= 20
+      );
+      if (alreadyCovered) {
+        text += `- No obvious missing defensive mod on the current item; compare replacements by total DPS/EHP and missing secondary stats\n`;
+      }
     }
 
     text += '\n';
@@ -359,7 +711,15 @@ export async function handleFindItemUpgrades(
       text += `- Intelligence (currently ${int_})\n`;
     }
 
-    text += `- Any open prefix/suffix for bench crafting a needed stat\n`;
+    if (!currentItemAnalysis) {
+      text += `- Candidate item with a verified open prefix/suffix for bench crafting a needed stat\n`;
+    } else if (currentItemAnalysis.flags.includes('Corrupted') || currentItemAnalysis.flags.includes('Mirrored')) {
+      text += `- Do not rely on bench crafting this current item because it is corrupted/mirrored\n`;
+    } else if (currentItemAnalysis.hasCraftedMod) {
+      text += `- Current item already has a crafted mod; prefer candidates with verified crafting space if a bench craft is part of the plan\n`;
+    } else {
+      text += `- Candidate item with verified open prefix/suffix; current item's open affixes are unknown from Lua output\n`;
+    }
     text += '\n';
 
     // --- BASE TYPE RECOMMENDATIONS ---

@@ -11,6 +11,9 @@ export interface SkillGemHandlerContext {
   ensureLuaClient?: () => Promise<void>;
 }
 
+const GEM_MECHANICS_FRESHNESS_NOTE =
+  'Gem quality, corruption outcomes, and Exceptional/alternate gem availability are version-sensitive. Verify with current PoB gem data and post-change stat readback before buying or corrupting.';
+
 /**
  * Handle analyze_skill_links tool call
  */
@@ -292,7 +295,12 @@ export async function handleValidateGemQuality(
   });
 
   // Format output
-  const outputLines: string[] = ['=== Gem Quality Validation ===', ''];
+  const outputLines: string[] = [
+    '=== Gem Quality Validation ===',
+    '',
+    `Mechanics freshness: ${GEM_MECHANICS_FRESHNESS_NOTE}`,
+    '',
+  ];
 
   if (validation.needsQuality.length > 0) {
     outputLines.push(`⚠ ${validation.needsQuality.length} gem(s) need quality improvement:`);
@@ -509,7 +517,7 @@ export async function handleGemUpgradePath(
             action: `Bring to 20% quality (currently ${quality}%)`,
             priority: (20 - quality) * multiplier * (isSupport ? 0.6 : 0.9),
             costEstimate: `~${costChaos}c in Gemcutter's Prisms`,
-            reason: 'Quality bonuses stack with gem level — use Hillock crafting bench for +28% quality',
+            reason: 'Quality bonuses vary by gem and patch — apply quality, then verify the current PoB readback/stat delta',
           });
         }
       }
@@ -546,7 +554,13 @@ export async function handleGemUpgradePath(
 
   upgrades.sort((a, b) => b.priority - a.priority);
 
-  const outputLines: string[] = ['=== Gem Upgrade Path ===', `Budget tier: ${budgetTier}`, ''];
+  const outputLines: string[] = [
+    '=== Gem Upgrade Path ===',
+    `Budget tier: ${budgetTier}`,
+    '',
+    `Mechanics freshness: ${GEM_MECHANICS_FRESHNESS_NOTE}`,
+    '',
+  ];
 
   if (upgrades.length === 0) {
     outputLines.push('All gems appear to be fully upgraded!');
