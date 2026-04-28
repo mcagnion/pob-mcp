@@ -78,7 +78,7 @@ describe('charge economy handler', () => {
     expect(text).toContain('Freshness marker: retrievedAt=');
     expect(text).toContain('--- Power Charges ---');
     expect(text).toContain('Stats: current=5, min=1, max=5');
-    expect(text).toContain('Config toggle usePowerCharges: true');
+    expect(text).toContain('Config toggle usePowerCharges: enabled');
     expect(text).toContain('Disciple of the Forbidden [123]');
     expect(text).toContain('+1 to Minimum Power Charges');
     expect(text).not.toContain('Unallocated Power Node [456]');
@@ -97,5 +97,16 @@ describe('charge economy handler', () => {
     await expect(handleAnalyzeChargeEconomy(context as any, 'rage')).rejects.toThrow(
       'Unknown charge_type "rage"'
     );
+  });
+
+  it('labels absent charge toggles without implying they were read', async () => {
+    const { context } = makeContext({
+      getConfig: jest.fn().mockResolvedValue({}),
+    });
+
+    const result = await handleAnalyzeChargeEconomy(context as any, 'power');
+    const text = result.content[0].text;
+
+    expect(text).toContain('Config toggle usePowerCharges: not present in config input');
   });
 });
