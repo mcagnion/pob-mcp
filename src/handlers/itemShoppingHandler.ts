@@ -181,6 +181,11 @@ interface ParsedCurrentItem {
   flags: string[];
   anoints: string[];
   hasCraftedMod: boolean;
+  sockets: {
+    total: number;
+    maxLinked: number;
+    summary: string | null;
+  };
   stats: {
     life: number;
     energyShield: number;
@@ -214,12 +219,19 @@ function parseCurrentItem(raw: string | undefined): ParsedCurrentItem | null {
   const lines = raw.split('\n').map(line => line.trim()).filter(Boolean);
   const mods: ParsedItemMod[] = [];
   const flags: string[] = [];
+  let socketGroups: string[] = [];
   let implicitTotal = 0;
   let pastImplicitsLine = false;
   let implicitCount = 0;
   let enchantCount = 0;
 
   for (const rawLine of lines) {
+    const socketsMatch = rawLine.match(/^Sockets:\s*(.+)$/i);
+    if (socketsMatch) {
+      socketGroups = socketsMatch[1].split(/\s+/).filter(Boolean);
+      continue;
+    }
+
     if (ITEM_SOURCE_FLAGS.has(rawLine)) {
       flags.push(rawLine);
       continue;
@@ -266,8 +278,28 @@ function parseCurrentItem(raw: string | undefined): ParsedCurrentItem | null {
     flags,
     anoints: mods.filter(mod => /\bAllocates\b/i.test(mod.line)).map(mod => mod.line),
     hasCraftedMod: mods.some(mod => mod.type === 'crafted'),
+    sockets: summarizeSocketLayout(socketGroups),
     stats: summarizeItemStats(mods),
   };
+}
+
+function summarizeSocketLayout(socketGroups: string[]): ParsedCurrentItem['sockets'] {
+  let total = 0;
+  let maxLinked = 0;
+
+  for (const group of socketGroups) {
+    const socketCount = (group.match(/[RGBW]/gi) ?? []).length;
+    total += socketCount;
+    maxLinked = Math.max(maxLinked, socketCount);
+  }
+
+  if (total === 0) {
+    return { total: 0, maxLinked: 0, summary: null };
+  }
+
+  const socketText = `${total} socket${total === 1 ? '' : 's'}`;
+  const linkText = maxLinked > 1 ? `, ${maxLinked}-link max` : '';
+  return { total, maxLinked, summary: `${socketText}${linkText}` };
 }
 
 function summarizeItemStats(mods: ParsedItemMod[]): ParsedCurrentItem['stats'] {
@@ -359,6 +391,11 @@ function formatCurrentItemDiagnosis(currentItem: ParsedCurrentItem | null): stri
     }
   }
 
+  if (currentItem.sockets.summary) {
+    lines.push('- Current socket/link layout:');
+    lines.push(`  - ${currentItem.sockets.summary}`);
+  }
+
   const constraints: string[] = [];
   if (currentItem.flags.length > 0) constraints.push(...currentItem.flags);
   if (currentItem.anoints.length > 0) constraints.push(`Anointed/allocated notable: ${currentItem.anoints.join(' | ')}`);
@@ -377,6 +414,51 @@ function formatCurrentItemDiagnosis(currentItem: ParsedCurrentItem | null): stri
     lines.push('- Crafting space: current item already has a crafted mod; do not assume another bench craft is available.');
   } else {
     lines.push('- Crafting space: open prefixes/suffixes are not exposed by the Lua item text; verify before planning a bench craft.');
+  }
+
+  lines.push('');
+  return lines.join('\n');
+}
+
+function formatReplacementGuardrails(
+  slot: string,
+  currentItem: ParsedCurrentItem | null,
+  currentItemRarity: string | null
+): string {
+  const lines: string[] = [
+    '## Replacement Guardrails',
+    '- Treat the filters below as search criteria, not an instruction to replace the equipped item blindly.',
+  ];
+
+  if (currentItemRarity?.toLowerCase() === 'unique') {
+    lines.push('- Current item is Unique; verify unique-only mechanics or build-enabling modifiers before replacing it with a rare stat stack.');
+  }
+
+  if (!currentItem) {
+    lines.push('- Current item raw mods are unavailable, so preserve any build-specific mechanics manually when comparing candidates.');
+    lines.push('');
+    return lines.join('\n');
+  }
+
+  const specialFlags = currentItem.flags.filter(flag => !['Corrupted', 'Mirrored'].includes(flag));
+  if (specialFlags.length > 0) {
+    lines.push(`- Preserve or deliberately replace special item source flags: ${specialFlags.join(', ')}.`);
+  }
+  if (currentItem.flags.includes('Corrupted') || currentItem.flags.includes('Mirrored')) {
+    lines.push('- Current item is corrupted/mirrored; replacement candidates are usually the only practical upgrade path unless the current item is already final.');
+  }
+  if (currentItem.anoints.length > 0) {
+    lines.push(`- Preserve the allocated notable or price replacement candidates with the same anoint: ${currentItem.anoints.join(' | ')}.`);
+  }
+  if (currentItem.hasCraftedMod) {
+    lines.push('- Current item uses a crafted mod; compare candidates after accounting for their craft availability, not just listed explicit stats.');
+  }
+  if (currentItem.sockets.maxLinked >= 5) {
+    lines.push(`- Preserve socket/link requirements: current ${slot} has ${currentItem.sockets.summary}; do not treat a lower-link candidate as equivalent.`);
+  }
+
+  if (lines.length === 2) {
+    lines.push('- No unique, corruption, anoint, special-source, craft, or 5-link+ blocker was detected from Lua item text; still validate build-specific mechanics in PoB.');
   }
 
   lines.push('');
@@ -500,6 +582,7 @@ export async function handleFindItemUpgrades(
     text += '\n';
     if (currentItemName || currentItemBase) {
       text += formatCurrentItemDiagnosis(currentItemAnalysis);
+      text += formatReplacementGuardrails(slot, currentItemAnalysis, currentItemRarity);
     }
     text += `## Mechanics Freshness\n- ${MECHANICS_FRESHNESS_NOTE}\n\n`;
 

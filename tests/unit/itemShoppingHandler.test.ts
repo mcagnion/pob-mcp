@@ -101,4 +101,39 @@ describe('handleFindItemUpgrades', () => {
     expect(text).toContain('Crafted mod already present');
     expect(text).toContain('regular bench crafting should not be assumed');
   });
+
+  it('warns that unique linked items need build-mechanic and link preservation before replacement', async () => {
+    const context = createContext({
+      slot: 'Body Armour',
+      id: 3,
+      name: 'Loreweave',
+      baseName: 'Elegant Ringmail',
+      rarity: 'Unique',
+      raw: [
+        'Rarity: Unique',
+        'Loreweave',
+        'Elegant Ringmail',
+        'Sockets: R-R-R-R-R-R',
+        'Implicits: 0',
+        '+50 to maximum Life',
+        '+30% to Fire Resistance',
+        '+30% to Cold Resistance',
+        '+30% to Lightning Resistance',
+      ].join('\n'),
+    });
+
+    const result = await handleFindItemUpgrades(context, {
+      slot: 'Body Armour',
+      priority: 'balanced',
+    });
+
+    const text = result.content[0].text;
+    expect(text).toContain('## Replacement Guardrails');
+    expect(text).toContain('not an instruction to replace the equipped item blindly');
+    expect(text).toContain('Current item is Unique');
+    expect(text).toContain('unique-only mechanics or build-enabling modifiers');
+    expect(text).toContain('Current socket/link layout');
+    expect(text).toContain('6 sockets, 6-link max');
+    expect(text).toContain('do not treat a lower-link candidate as equivalent');
+  });
 });
