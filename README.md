@@ -216,7 +216,7 @@ The server registers **93 tools** across 10 categories.
 | `compare_trees` | Show node differences between two builds |
 | `get_nearby_nodes` | Find notables/keystones reachable from current allocation |
 | `find_path_to_node` | Shortest path to a target node ID |
-| `get_passive_upgrades` | Suggest passive tree upgrades |
+| `get_passive_upgrades` | Heuristic next-node suggestions; use `find_best_anointment` for anoints |
 | `suggest_masteries` | Suggest mastery choices for allocated clusters |
 
 ### Lua Bridge — Core (Require `POB_LUA_ENABLED=true`)

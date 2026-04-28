@@ -15,6 +15,13 @@ export interface PassiveUpgradesContext {
   ensureLuaClient: () => Promise<void>;
 }
 
+const PASSIVE_UPGRADES_GUARDRAILS = [
+  'Guardrail: heuristic next-node scanner only; not an exhaustive passive-tree optimizer.',
+  'Guardrail: do NOT use this for anointments. Use find_best_anointment for Amulet/Cord Belt anoint rankings.',
+  'Guardrail: candidates come from a small keyword search before simulation, so relevant nodes outside those keywords can be missed.',
+  'Guardrail: if results look inconsistent after repeated simulations, reload the build before continuing analysis.',
+];
+
 export async function handleCompareTrees(
   context: TreeHandlerContext,
   build1Name: string,
@@ -407,7 +414,14 @@ export async function handleGetPassiveUpgrades(
     return {
       content: [{
         type: 'text' as const,
-        text: `=== Passive Upgrades (focus: ${focus}) ===\n\nNo unallocated notable candidates found. Make sure a build is loaded.\n`,
+        text: [
+          `=== Passive Upgrades (focus: ${focus}) ===`,
+          '',
+          ...PASSIVE_UPGRADES_GUARDRAILS,
+          '',
+          'No unallocated notable candidates found. Make sure a build is loaded.',
+          '',
+        ].join('\n'),
       }],
     };
   }
@@ -457,6 +471,8 @@ export async function handleGetPassiveUpgrades(
   const textLines: string[] = [
     `=== Passive Upgrades (focus: ${focus}) ===`,
     '',
+    ...PASSIVE_UPGRADES_GUARDRAILS,
+    '',
     `Base DPS: ${Math.round(baseDPS).toLocaleString()}  |  Base EHP: ${Math.round(baseEHP).toLocaleString()}`,
     `Evaluated ${candidates.length} candidate notables, showing top ${top.length}:`,
     '',
@@ -480,7 +496,7 @@ export async function handleGetPassiveUpgrades(
   if (top.length === 0) {
     textLines.push('No results after simulation. Try a different focus or ensure a build is loaded.');
   } else {
-    textLines.push('', '💡 Use lua_set_tree to allocate the top node and recalculate stats.');
+    textLines.push('', 'Next steps: inspect the top node with search_tree_nodes/find_path_to_node before allocation. Use lua_set_tree only after confirming pathing and opportunity cost.');
   }
 
   return {
