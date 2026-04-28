@@ -468,7 +468,7 @@ export function getLuaToolSchemas(): any[] {
     },
     {
       name: "update_tree_delta",
-      description: "STATEFUL MUTATION: incrementally add or remove passive nodes from the currently loaded tree allocation. This is not an isolated what-if calculator and does not provide an undo token; use suggest_optimal_nodes for measured passive ranking or lua_reload_build after inspection to restore from disk. Note: max 8 ascendancy points allowed.",
+      description: "STATEFUL MUTATION: incrementally add or remove passive nodes from the currently loaded tree allocation. This is not an isolated what-if calculator and does not provide an undo token. The handler snapshots the node list before mutation and reports the actual added/removed/dropped nodes returned by PoB import; use suggest_optimal_nodes/calc_with for measured passive ranking or lua_reload_build after inspection to restore from disk. Note: max 8 ascendancy points allowed.",
       inputSchema: {
         type: "object",
         properties: {

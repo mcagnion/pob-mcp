@@ -601,6 +601,35 @@ export async function handleLuaReloadBuild(context: LuaHandlerContext, buildName
   });
 }
 
+function parseTreeNodeIds(values: string[] | undefined, argName: string): number[] {
+  if (!values?.length) return [];
+  return values.map((value) => {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new Error(`${argName} contains invalid node id: ${JSON.stringify(value)}`);
+    }
+    return id;
+  });
+}
+
+function normalizeTreeNodeIds(nodes: unknown): number[] {
+  if (!Array.isArray(nodes)) return [];
+  return [...new Set(nodes
+    .map((node) => Number(node))
+    .filter((node) => Number.isInteger(node) && node > 0)
+  )].sort((a, b) => a - b);
+}
+
+function without(left: number[], right: Set<number>): number[] {
+  return left.filter((node) => !right.has(node));
+}
+
+function formatNodeIds(nodes: number[]): string {
+  if (nodes.length === 0) return 'none';
+  const shown = nodes.slice(0, 40).join(', ');
+  return nodes.length > 40 ? `${shown}, ... (${nodes.length - 40} more)` : shown;
+}
+
 export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes?: string[], removeNodes?: string[]) {
   return wrapHandler('update tree delta', async () => {
     await context.ensureLuaClient();
@@ -611,37 +640,65 @@ export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes
       throw new Error('At least one of add_nodes or remove_nodes must be provided.');
     }
 
+    const requestedAdds = parseTreeNodeIds(addNodes, 'add_nodes');
+    const requestedRemoves = parseTreeNodeIds(removeNodes, 'remove_nodes');
     const params: { addNodes?: number[]; removeNodes?: number[] } = {};
-    if (addNodes?.length)    params.addNodes    = addNodes.map(Number);
-    if (removeNodes?.length) params.removeNodes = removeNodes.map(Number);
+    if (requestedAdds.length) params.addNodes = requestedAdds;
+    if (requestedRemoves.length) params.removeNodes = requestedRemoves;
 
+    const beforeTree = await luaClient.getTree();
+    const beforeIds = normalizeTreeNodeIds(beforeTree?.nodes);
+    const beforeSet = new Set(beforeIds);
     const result = await luaClient.updateTreeDelta(params);
     const tree = result?.tree;
+    const afterIds = normalizeTreeNodeIds(tree?.nodes);
+    const afterSet = new Set(afterIds);
     const autoPathedNodes = result?.autoPathedNodes;
     const skippedAsc = result?.skippedAscendancyNodes;
 
-    const actualCount = Array.isArray(tree?.nodes) ? tree.nodes.length : '?';
-    const addedCount  = addNodes?.length ?? 0;
-    const removedCount = removeNodes?.length ?? 0;
+    const actualAdded = without(afterIds, beforeSet);
+    const actualRemoved = without(beforeIds, afterSet);
+    const requestedAddSet = new Set(requestedAdds);
+    const requestedRemoveSet = new Set(requestedRemoves);
+    const requestedAddsStillMissing = requestedAdds.filter((node) => !afterSet.has(node));
+    const requestedRemovesStillAllocated = requestedRemoves.filter((node) => afterSet.has(node));
+    const extraAdded = actualAdded.filter((node) => !requestedAddSet.has(node));
+    const unrequestedRemoved = actualRemoved.filter((node) => !requestedRemoveSet.has(node));
 
     let text = `⚠️ STATEFUL TREE MUTATION\n`;
     text += `This tool modifies the currently loaded passive tree. It is not an isolated what-if calculator and does not return an undo token.\n`;
     text += `Use suggest_optimal_nodes for measured passive ranking, or call lua_reload_build after inspection to restore the build from disk.\n\n`;
     text += `✅ Tree delta applied.\n`;
-    if (addedCount)    text += `  Added: ${addedCount} node(s)\n`;
-    if (removedCount)  text += `  Removed: ${removedCount} node(s)\n`;
-    text += `  Total allocated: ${actualCount} nodes\n`;
+    if (requestedAdds.length) text += `  Requested add_nodes: ${formatNodeIds(requestedAdds)}\n`;
+    if (requestedRemoves.length) text += `  Requested remove_nodes: ${formatNodeIds(requestedRemoves)}\n`;
+    text += `  Total allocated: ${afterIds.length} nodes (before: ${beforeIds.length})\n`;
+    text += `\nActual tree diff:\n`;
+    text += `  Actual added: ${formatNodeIds(actualAdded)}\n`;
+    text += `  Actual removed: ${formatNodeIds(actualRemoved)}\n`;
+
+    if (requestedAddsStillMissing.length > 0) {
+      text += `  Requested add_nodes still absent after import: ${formatNodeIds(requestedAddsStillMissing)}\n`;
+    }
+    if (requestedRemovesStillAllocated.length > 0) {
+      text += `  Requested remove_nodes still allocated after import: ${formatNodeIds(requestedRemovesStillAllocated)}\n`;
+    }
+    if (extraAdded.length > 0) {
+      text += `  Additional nodes added by import/pathing: ${formatNodeIds(extraAdded)}\n`;
+    }
+    if (unrequestedRemoved.length > 0) {
+      text += `  Unrequested nodes removed/dropped by import: ${formatNodeIds(unrequestedRemoved)}\n`;
+    }
 
     if (autoPathedNodes && autoPathedNodes.length > 0) {
-      text += `\n🔗 Auto-pathed ${autoPathedNodes.length} intermediate node(s) to maintain connectivity.`;
+      text += `\n🔗 Lua bridge reported auto-pathed node(s): ${formatNodeIds(normalizeTreeNodeIds(autoPathedNodes))}.`;
     }
 
     if (skippedAsc && skippedAsc.length > 0) {
       text += `\n🔴 BLOCKED: ${skippedAsc.length} ascendancy node(s) skipped — would exceed 8-point ascendancy cap (IDs: ${skippedAsc.join(', ')}).`;
     }
 
-    if (addedCount > 0 && !autoPathedNodes?.length && !skippedAsc?.length) {
-      text += `\n⚠️  If total count is lower than expected, some nodes may have been dropped (not connected or invalid IDs).`;
+    if (requestedAdds.length > 0 && !autoPathedNodes?.length && !skippedAsc?.length) {
+      text += `\n⚠️  If actual added differs from requested add_nodes, PoB import may have dropped invalid/unconnected nodes or added pathing nodes.`;
     }
 
     const ascUsed = tree?.ascendancyPointsUsed ?? 0;
