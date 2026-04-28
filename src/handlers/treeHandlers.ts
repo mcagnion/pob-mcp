@@ -541,8 +541,10 @@ export async function handleSuggestMasteries(context: PassiveUpgradesContext) {
 
   for (const mastery of masteries) {
     outputLines.push(`**${mastery.nodeName}** (node ${mastery.nodeId})`);
+    const availableEffects: any[] = Array.isArray(mastery.availableEffects) ? mastery.availableEffects : [];
+    const allocatedEffect = mastery.allocatedEffect == null ? null : Number(mastery.allocatedEffect);
     if (mastery.allocatedEffect != null) {
-      const current = mastery.availableEffects.find((e: any) => e.effectId === mastery.allocatedEffect);
+      const current = availableEffects.find((e: any) => Number(e.effectId) === allocatedEffect);
       outputLines.push(`  Current: ${current?.stat ?? mastery.allocatedEffect}`);
     } else {
       outputLines.push('  Current: (none selected)');
@@ -550,7 +552,11 @@ export async function handleSuggestMasteries(context: PassiveUpgradesContext) {
 
     // Simulate each effect choice
     const scored: ScoredEffect[] = [];
-    for (const effect of mastery.availableEffects) {
+    const candidateEffects = allocatedEffect == null
+      ? availableEffects
+      : availableEffects.filter((effect: any) => Number(effect.effectId) !== allocatedEffect);
+
+    for (const effect of candidateEffects) {
       try {
         const newMasteryEffects = { ...currentMasteryEffects, [mastery.nodeId]: effect.effectId };
         const out = await luaClient.calcWith({ masteryEffects: newMasteryEffects });
@@ -568,7 +574,9 @@ export async function handleSuggestMasteries(context: PassiveUpgradesContext) {
       ((b.dpsDelta / baseDPS) + (b.ehpDelta / baseEHP)) -
       ((a.dpsDelta / baseDPS) + (a.ehpDelta / baseEHP))
     );
-    if (scored.length === 0) {
+    if (candidateEffects.length === 0) {
+      outputLines.push('  (no alternative effects available for this mastery)');
+    } else if (scored.length === 0) {
       outputLines.push('  (simulation unavailable for this mastery)');
     }
     for (const s of scored.slice(0, 3)) {
