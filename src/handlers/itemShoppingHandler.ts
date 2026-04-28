@@ -13,6 +13,9 @@ export interface ItemShoppingContext {
   getLuaClient: () => PoBLuaApiClient | null;
 }
 
+const MECHANICS_FRESHNESS_NOTE =
+  'Static slot/base notes can become stale across PoE patches. Verify enchants, Heist/Hillock quality, Harvest, Eldritch, influence, corruption, and Watcher\'s Eye mechanics against current PoB data or live trade filters before treating them as available.';
+
 // Slot-specific knowledge: which mods matter and what the base options are
 const SLOT_KNOWLEDGE: Record<string, {
   label: string;
@@ -49,11 +52,11 @@ const SLOT_KNOWLEDGE: Record<string, {
     suggestedBases: [
       'Hubris Circlet — highest ES base for spell builds',
       'Eternal Burgonet — highest armour base',
-      'Bone Helmet — 40% increased minion damage enchant (minion builds)',
+      'Bone Helmet — minion-themed base; verify current implicit/mod availability before targeting it',
       'Starkonja\'s Head / rare open prefix for elder mods',
     ],
     universalMods: [],
-    notes: 'Check if your skill has a helmet enchantment — it can be a massive damage boost. Enchanted bases command a premium.',
+    notes: 'Helmet enchants and special implicits are version-sensitive. Do not pay a premium for an old Lab/Heist enchant unless current PoB data or live trade filters confirm it exists for the league.',
     tradeFilters: [],
   },
   'Body Armour': {
@@ -498,6 +501,7 @@ export async function handleFindItemUpgrades(
     if (currentItemName || currentItemBase) {
       text += formatCurrentItemDiagnosis(currentItemAnalysis);
     }
+    text += `## Mechanics Freshness\n- ${MECHANICS_FRESHNESS_NOTE}\n\n`;
 
     // --- BUILD GAPS ---
     const gaps: string[] = [];
