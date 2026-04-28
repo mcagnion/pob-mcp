@@ -1025,6 +1025,21 @@ export function getConfigToolSchemas(): any[] {
       },
     },
     {
+      name: "analyze_charge_economy",
+      description: "Explain where the loaded build's Power/Frenzy/Endurance charges come from. Reports current/min/max charge stats, config toggles, allocated passive sources, and equipped item charge mod lines. Use before answering charge-source questions so minimum and maximum charge sources are not missed.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          charge_type: {
+            type: "string",
+            description: "Charge type to analyze: 'all' (default), 'power', 'frenzy', or 'endurance'.",
+            enum: ["all", "power", "frenzy", "endurance"],
+            default: "all",
+          },
+        },
+      },
+    },
+    {
       name: "set_enemy_stats",
       description: "Configure enemy parameters for DPS calculations. Test against different enemy types (map boss, Shaper, Maven). Requires Lua bridge.",
       inputSchema: {

@@ -302,6 +302,7 @@ A build with all 3 layers is considered exceptional.
 |---|---|
 | `get_config` | View bandit, pantheon, and enemy settings |
 | `set_config` | Toggle charges, buffs, conditions (e.g. `usePowerCharges`, `enemyIsBoss`) |
+| `analyze_charge_economy` | Explain current/min/max charges and their passive/item sources |
 | `set_enemy_stats` | Set enemy level, resistances, armour, evasion for DPS scenarios |
 | `save_config_preset` | Save current config as a named preset |
 | `load_config_preset` | Load a saved config preset |

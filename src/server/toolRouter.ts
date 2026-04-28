@@ -36,6 +36,7 @@ import { handleCheckBossReadiness } from "../handlers/bossReadinessHandlers.js";
 import { handleSuggestWatchersEye } from "../handlers/jewelAdvisorHandlers.js";
 import { handleSuggestCrafting } from "../handlers/craftingAdvisorHandler.js";
 import { handleFindItemUpgrades as handleFindItemUpgradesNew } from "../handlers/itemShoppingHandler.js";
+import { handleAnalyzeChargeEconomy } from "../handlers/chargeEconomyHandlers.js";
 
 export interface ToolRouterDependencies {
   toolGate: ToolGate;
@@ -295,6 +296,15 @@ export async function routeToolCall(
 
     case "list_config_presets":
       return await handleListConfigPresets(deps.contextBuilder.buildConfigPresetContext());
+
+    case "analyze_charge_economy":
+      return await handleAnalyzeChargeEconomy(
+        {
+          getLuaClient: deps.getLuaClient,
+          ensureLuaClient: deps.ensureLuaClient,
+        },
+        args?.charge_type as string | undefined
+      );
 
     case "lua_set_tree":
       if (!args) throw new Error("Missing arguments");
