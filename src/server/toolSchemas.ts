@@ -1578,7 +1578,7 @@ export function getBuildGoalsToolSchemas(): any[] {
     },
     {
       name: "get_passive_upgrades",
-      description: "Find the best unallocated notable passives to pick up next, ranked by their actual stat impact. Uses calcWith to simulate each candidate and scores by relative DPS/EHP gain.",
+      description: "Heuristic next-node scanner for unallocated notable passives. It keyword-searches a small candidate set, simulates those candidates with calcWith, and scores by relative DPS/EHP gain. Not exhaustive and not for anointments; use find_best_anointment for Amulet/Cord Belt anoint rankings.",
       inputSchema: {
         type: "object",
         properties: {
