@@ -133,6 +133,21 @@ async function loadWatchersEyeData(): Promise<WatchersEyeData | null> {
   return null;
 }
 
+function describeWatchersEyeSource(source: string): string {
+  const sourceBaseName = path.basename(source) || 'WatchersEye.lua';
+  const configuredData = process.env.POB_WATCHERS_EYE_DATA;
+  if (configuredData && path.resolve(configuredData) === path.resolve(source)) {
+    return `current PoB data from POB_WATCHERS_EYE_DATA (${sourceBaseName})`;
+  }
+
+  const forkPath = process.env.POB_FORK_PATH;
+  if (forkPath && path.resolve(source).startsWith(path.resolve(forkPath))) {
+    return `current PoB data from POB_FORK_PATH (${sourceBaseName})`;
+  }
+
+  return `current PoB data (${sourceBaseName})`;
+}
+
 function detectActiveAuras(groups: any[], knownAuras: Iterable<string>): string[] {
   const knownByNormalizedName = new Map<string, string>();
   for (const aura of knownAuras) {
@@ -176,10 +191,11 @@ export async function handleSuggestWatchersEye(context: JewelAdvisorContext) {
     return { content: [{ type: 'text' as const, text: output }] };
   }
 
-  output += `Data source: ${data.source}\n`;
-  output += `Ranking: heuristic S/A/B labels over current PoB mod text; verify exact value ranges, DPS delta, and market price before buying.\n\n`;
+  output += `Data source: ${describeWatchersEyeSource(data.source)}\n`;
+  output += 'Ranking model: heuristic S/A/B labels from current PoB mod text, not a measured DPS/EHP or price ranking.\n';
+  output += 'Use these as trade filters to inspect, then verify exact rolls, build delta, and market price before buying.\n\n';
   output += `**Active Auras Detected:** ${activeAuras.join(', ')}\n\n`;
-  output += `A Watcher's Eye rolls mods for 2–3 aura variants. Prefer combinations that are valid in current PoB data and measurable for this build.\n\n`;
+  output += `A Watcher's Eye rolls mods for 2-3 aura variants. The combinations below are compatibility ideas, not BIS claims.\n\n`;
 
   for (const aura of activeAuras) {
     const mods = data.modsByAura.get(aura);
@@ -193,24 +209,23 @@ export async function handleSuggestWatchersEye(context: JewelAdvisorContext) {
     output += '\n';
   }
 
-  // Suggest best 2-mod combinations from S-tier mods across different auras
   const sTierByAura = activeAuras
     .map(a => ({ aura: a, mods: (data.modsByAura.get(a) ?? []).filter(m => m.tier === 'S') }))
     .filter(x => x.mods.length > 0);
 
   if (sTierByAura.length >= 2) {
-    output += '**Best 2-mod combinations (S-tier):**\n';
+    output += '**Heuristic 2-mod combinations to inspect (S-tier labels):**\n';
     for (let i = 0; i < Math.min(sTierByAura.length, 4); i++) {
       for (let j = i + 1; j < Math.min(sTierByAura.length, 4); j++) {
         const a = sTierByAura[i];
         const b = sTierByAura[j];
-        output += `  - ${a.aura}: ${a.mods[0].mod.slice(0, 45)}… + ${b.aura}: ${b.mods[0].mod.slice(0, 45)}…\n`;
+        output += `  - ${a.aura}: ${a.mods[0].mod.slice(0, 45)}... + ${b.aura}: ${b.mods[0].mod.slice(0, 45)}...\n`;
       }
     }
     output += '\n';
   }
 
-  output += `_Use \`get_currency_rates\` to estimate current market prices for specific mods._\n`;
+  output += `_Use \`search_trade_items\` with exact Watcher's Eye stat filters, then validate shortlisted jewels in PoB._\n`;
 
   return { content: [{ type: 'text' as const, text: output }] };
   });
