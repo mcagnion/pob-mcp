@@ -20,6 +20,76 @@ interface WeightedTradeContext extends TradeContext {
   ensureLuaClient: () => Promise<void>;
 }
 
+type WeightedTradeQuery = Record<string, unknown> & {
+  sort?: Record<string, unknown>;
+  query?: {
+    stats?: Array<{
+      filters?: unknown[];
+    }>;
+  };
+};
+
+const WEIGHTED_TRADE_SUPPORTED_SLOT_EXAMPLES = '"Belt", "Helmet", "Ring 1", or an exact PoB jewel slot name';
+
+function normalizeWeightedTradeSlot(slot: string): string {
+  const trimmed = slot.trim();
+  const normalized = trimmed
+    .toLowerCase()
+    .replace(/[’`]/g, "'")
+    .replace(/\s+/g, ' ');
+
+  if (normalized === "watcher's eye" || normalized === 'watchers eye') {
+    throw new Error(
+      `slot resolution failed: "${trimmed}" is a unique item name, not an equipped PoB slot. ` +
+      `find_weighted_trade_items supports equipped slots only (${WEIGHTED_TRADE_SUPPORTED_SLOT_EXAMPLES}). ` +
+      'Use search_trade_items with explicit Watcher\'s Eye stat filters, or pass the exact equipped jewel slot name.'
+    );
+  }
+
+  return trimmed;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function prepareWeightedTradeQueryForApi(query: WeightedTradeQuery): {
+  query: WeightedTradeQuery;
+  warnings: string[];
+} {
+  const warnings: string[] = [];
+  const sort = isRecord(query.sort) ? query.sort : undefined;
+  const unsupportedSortKeys = sort
+    ? Object.keys(sort).filter((key) => key.startsWith('statgroup.'))
+    : [];
+
+  if (unsupportedSortKeys.length === 0) {
+    return { query, warnings };
+  }
+
+  warnings.push(
+    `PoB generated weighted sort key(s) ${unsupportedSortKeys.join(', ')}, ` +
+    'which the public trade JSON API rejects. Falling back to price ascending; ' +
+    'results are weighted-filter candidates, not final PoB-ranked DPS/eHP order.'
+  );
+
+  return {
+    query: {
+      ...query,
+      sort: { price: 'asc' },
+    },
+    warnings,
+  };
+}
+
+function getWeightedModCount(query: WeightedTradeQuery): number | string {
+  return query.query?.stats?.[0]?.filters?.length ?? '?';
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 // ========================================
 // Trade Site URL Helpers
 // ========================================
@@ -1061,26 +1131,52 @@ export async function handleFindWeightedTradeItems(
     const { league, slot, options, limit = 5 } = args;
     if (!league) throw new Error('league is required');
     if (!slot) throw new Error('slot is required (e.g. "Belt", "Ring 1", "Body Armour")');
+    const normalizedSlot = normalizeWeightedTradeSlot(slot);
 
     await context.ensureLuaClient();
     const luaClient = context.getLuaClient();
     if (!luaClient) throw new Error('Lua client not initialized — load a build first');
 
-    const { query: pobQuery, warning } = await luaClient.generateWeightedTradeQuery(slot, options);
+    let pobQuery: unknown;
+    let warning: string | undefined;
+    try {
+      const result = await luaClient.generateWeightedTradeQuery(normalizedSlot, options);
+      pobQuery = result.query;
+      warning = result.warning;
+    } catch (error) {
+      const message = formatError(error);
+      if (message.startsWith('unknown slot:')) {
+        throw new Error(
+          `slot resolution failed: ${message}. ` +
+          `Pass an exact equipped PoB slot name (${WEIGHTED_TRADE_SUPPORTED_SLOT_EXAMPLES}).`
+        );
+      }
+      throw error;
+    }
+
     if (!pobQuery || typeof pobQuery !== 'object') {
       throw new Error(`PoB returned no query JSON${warning ? ` (${warning})` : ''}`);
     }
 
-    // PoB's query carries fields beyond the typed TradeQuery shape (engine, statgroup sort).
-    // The trade API accepts them, so we forward as-is via an unknown cast.
-    const searchResult = await context.tradeClient.searchItems(league, pobQuery as unknown as TradeQuery);
+    const { query: apiQuery, warnings } = prepareWeightedTradeQueryForApi(pobQuery as WeightedTradeQuery);
+    let searchResult;
+    try {
+      searchResult = await context.tradeClient.searchItems(league, apiQuery as unknown as TradeQuery);
+    } catch (error) {
+      throw new Error(`trade API query failed for slot "${normalizedSlot}": ${formatError(error)}`);
+    }
+
+    const warningText = [
+      warning,
+      ...warnings,
+    ].filter((line): line is string => !!line);
 
     if (!searchResult.result || searchResult.result.length === 0) {
       const empty =
-        `=== Weighted BIS Search (${league}, slot: ${slot}) ===\n` +
+        `=== Weighted BIS Search (${league}, slot: ${normalizedSlot}) ===\n` +
         `No items found.\n` +
-        (warning ? `Warning: ${warning}\n` : '') +
-        `Query had ${(pobQuery as any)?.query?.stats?.[0]?.filters?.length ?? '?'} weighted mods.\n`;
+        warningText.map((line) => `Warning: ${line}\n`).join('') +
+        `Query had ${getWeightedModCount(pobQuery as WeightedTradeQuery)} weighted mods.\n`;
       return { content: [{ type: 'text', text: empty }] };
     }
 
@@ -1088,10 +1184,10 @@ export async function handleFindWeightedTradeItems(
     const itemIds = searchResult.result.slice(0, cap);
     const items = await context.tradeClient.fetchItems(itemIds, searchResult.id);
 
-    let output = `=== Weighted BIS Search (${league}, slot: ${slot}) ===\n`;
+    let output = `=== Weighted BIS Search (${league}, slot: ${normalizedSlot}) ===\n`;
     output += `Total matches: ${searchResult.total} | Showing: ${items.length}\n`;
     output += `🔗 ${getTradeSearchUrl(league, searchResult.id)}\n`;
-    if (warning) output += `Warning: ${warning}\n`;
+    for (const line of warningText) output += `Warning: ${line}\n`;
     output += `\n`;
 
     items.forEach((listing, i) => {

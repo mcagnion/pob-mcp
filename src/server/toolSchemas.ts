@@ -1499,11 +1499,11 @@ export function getTradeToolSchemas(): any[] {
           },
           slot: {
             type: "string",
-            description: "Equipment slot to search BIS for. Examples: 'Belt', 'Helmet', 'Body Armour', 'Gloves', 'Boots', 'Amulet', 'Ring 1', 'Ring 2', 'Weapon 1', 'Weapon 2', 'Helmet Abyssal Socket #1'. Must match PoB's slot naming.",
+            description: "Equipment slot to search BIS for. Examples: 'Belt', 'Helmet', 'Body Armour', 'Gloves', 'Boots', 'Amulet', 'Ring 1', 'Ring 2', 'Weapon 1', 'Weapon 2', 'Helmet Abyssal Socket #1'. Must match PoB's equipped slot naming; item names such as Watcher's Eye are not slot names.",
           },
           options: {
             type: "object",
-            description: "Pass-through options forwarded to PoB's TradeQueryGenerator:StartQuery. Optional fields: statWeights (overrides build's default sort list), influence1/influence2 (1=None), jewelType ('Any'|'Base'|'Abyss'), includeMirrored, includeCorrupted, includeScourge, includeEldritch, includeSynthesis, maxPrice, maxPriceType, maxLevel, sockets, links, special{itemName} (e.g. 'Megalomaniac'). When omitted, uses the loaded build's defaults.",
+            description: "Pass-through options forwarded to PoB's TradeQueryGenerator:StartQuery. Optional fields: statWeights (overrides build's default sort list), influence1/influence2 (1=None), jewelType ('Any'|'Base'|'Abyss'), includeMirrored, includeCorrupted, includeScourge, includeEldritch, includeSynthesis, maxPrice, maxPriceType, maxLevel, sockets, links, special{itemName} (e.g. 'Megalomaniac'). When omitted, uses the loaded build's defaults. If PoB emits a statgroup weighted sort key unsupported by the public trade JSON API, MCP falls back to price ascending and warns that results are weighted-filter candidates, not final PoB-ranked order.",
           },
           limit: {
             type: "number",
