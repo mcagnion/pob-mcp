@@ -270,7 +270,7 @@ function appendChargeSection(
 ) {
   lines.push(`--- ${def.label} ---`);
   lines.push(`Stats: current=${formatMaybe(stats[def.statKeys.current])}, min=${formatMaybe(stats[def.statKeys.minimum])}, max=${formatMaybe(stats[def.statKeys.maximum])}`);
-  lines.push(`Config toggle ${def.configKey}: ${formatMaybe(config[def.configKey])}`);
+  lines.push(`Config toggle ${def.configKey}: ${formatConfigToggle(config, def.configKey)}`);
 
   lines.push("Passive sources:");
   if (passiveSources.length === 0) {
@@ -303,6 +303,14 @@ function appendChargeSection(
 
 function formatMaybe(value: any): string {
   if (value === undefined || value === null || value === "") return "unknown";
+  return String(value);
+}
+
+function formatConfigToggle(config: Record<string, any>, key: string): string {
+  if (!(key in config)) return "not present in config input";
+  const value = config[key];
+  if (value === true) return "enabled";
+  if (value === false) return "disabled";
   return String(value);
 }
 
