@@ -67,7 +67,7 @@ function getNumericStat(stats: Record<string, any> | null, field: string): numbe
 }
 
 function formatNumber(value: number): string {
-  return Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, { maximumFractionDigits: 3 });
+  return Number.isInteger(value) ? value.toLocaleString('en-US') : value.toLocaleString('en-US', { maximumFractionDigits: 3 });
 }
 
 function formatStatDelta(field: string, before: number | null, after: number | null): string | null {
