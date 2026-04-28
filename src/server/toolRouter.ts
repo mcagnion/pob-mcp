@@ -636,7 +636,11 @@ export async function routeToolCall(
         recommendationEngine: deps.recommendationEngine || undefined,
         ninjaClient: deps.ninjaClient
       };
-      return await handleCompareTradeItems(tradeContext, args as any);
+      return await handleCompareTradeItems(tradeContext, {
+        item_ids: args.item_ids as string[],
+        league: args.league as string | undefined,
+        build_context: args.build_context as any,
+      });
     }
 
     case "search_cluster_jewels": {

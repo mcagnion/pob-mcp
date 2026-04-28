@@ -1,7 +1,8 @@
 /**
  * Shopping List Service
  *
- * Generates prioritized shopping lists from PoB builds with price estimates
+ * Generates prioritized shopping lists from PoB builds with heuristic budget bands.
+ * Numeric market prices must come from live trade tools.
  */
 
 import { PoBBuild } from '../types.js';

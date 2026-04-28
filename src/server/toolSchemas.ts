@@ -1417,7 +1417,7 @@ export function getTradeToolSchemas(): any[] {
   return [
     {
       name: "search_trade_items",
-      description: "Search the Path of Exile trade site for items with filters. Returns matching items with prices, stats, and seller information. Default limit is 5 items to minimize token usage. REQUIRES: POE_TRADE_ENABLED environment variable set to true.",
+      description: "Search the Path of Exile trade site for items with filters. Returns matching items with live trade source, league, timestamp, sample size, prices, stats, seller information, and thin-market warnings. Default limit is 5 items to minimize token usage. REQUIRES: POE_TRADE_ENABLED environment variable set to true.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1515,7 +1515,7 @@ export function getTradeToolSchemas(): any[] {
     },
     {
       name: "get_item_price",
-      description: "Quick price check for a specific item by name. Returns current market price and recent sales. REQUIRES: POE_TRADE_ENABLED environment variable set to true. IMPORTANT: Use the EXACT league name the user specifies.",
+      description: "Quick live price check for a specific item by name. Returns market source, league, timestamp, total listings, priced sample size, price statistics, and thin-market warnings. REQUIRES: POE_TRADE_ENABLED environment variable set to true. IMPORTANT: Use the EXACT league name the user specifies.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1630,7 +1630,7 @@ export function getTradeToolSchemas(): any[] {
     },
     {
       name: "generate_shopping_list",
-      description: "Generate a prioritized shopping list of items to upgrade for a build within a budget. REQUIRES: POE_TRADE_ENABLED environment variable set to true.",
+      description: "Generate a prioritized shopping list of item upgrade targets for a build. Does not quote numeric market prices unless live trade data is checked separately; use search_trade_items or get_item_price for spending decisions. REQUIRES: POE_TRADE_ENABLED environment variable set to true.",
       inputSchema: {
         type: "object",
         properties: {

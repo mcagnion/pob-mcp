@@ -67,18 +67,18 @@ export async function handleGenerateShoppingList(
 /**
  * Format shopping list for output
  */
-function formatShoppingList(list: any, selectedBudget: BudgetTier): string {
+export function formatShoppingList(list: any, selectedBudget: BudgetTier): string {
   let output = `=== Shopping List: ${list.buildName} ===\n`;
   output += `League: ${list.league}\n`;
   output += `Budget: ${selectedBudget}\n\n`;
+  output += `Market Price Status: Not live-checked by this tool.\n`;
+  output += `Use search_trade_items or get_item_price in ${list.league} before making spending decisions.\n\n`;
 
   // Summary
   output += `📊 SUMMARY\n`;
   output += `Items to Upgrade: ${list.summary.totalItems}\n`;
   output += `Critical: ${list.summary.criticalUpgrades}\n`;
-  output += `Budget Cost: ~${list.summary.totalBudgetCost} chaos\n`;
-  output += `Medium Cost: ~${list.summary.totalMediumCost} chaos\n`;
-  output += `Endgame Cost: ~${list.summary.totalEndgameCost} chaos\n\n`;
+  output += `Market Cost: not quoted without live price data\n\n`;
 
   // Build Needs
   if (list.buildNeeds.lifeNeeded > 0 || Object.values(list.buildNeeds.resistanceGaps).some((v: any) => v > 0)) {
@@ -106,7 +106,7 @@ function formatShoppingList(list: any, selectedBudget: BudgetTier): string {
     for (const slot of list.priorities.immediate) {
       const item = list.items.find((i: any) => i.slot === slot);
       if (item) {
-        output += formatShoppingItem(item, selectedBudget, true);
+        output += formatShoppingItem(item, selectedBudget, true, list.league);
       }
     }
     output += '\n';
@@ -117,7 +117,7 @@ function formatShoppingList(list: any, selectedBudget: BudgetTier): string {
     for (const slot of list.priorities.shortTerm) {
       const item = list.items.find((i: any) => i.slot === slot);
       if (item) {
-        output += formatShoppingItem(item, selectedBudget, true);
+        output += formatShoppingItem(item, selectedBudget, true, list.league);
       }
     }
     output += '\n';
@@ -128,12 +128,12 @@ function formatShoppingList(list: any, selectedBudget: BudgetTier): string {
     for (const slot of list.priorities.longTerm) {
       const item = list.items.find((i: any) => i.slot === slot);
       if (item) {
-        output += formatShoppingItem(item, selectedBudget, false);
+        output += formatShoppingItem(item, selectedBudget, false, list.league);
       }
     }
   }
 
-  output += `\n💡 TIP: Use the 'search_trade_items' or 'find_item_upgrades' tools to find specific items`;
+  output += `\n💡 TIP: Use the 'search_trade_items' or 'find_item_upgrades' tools to find specific items with current prices`;
 
   return output;
 }
@@ -141,7 +141,7 @@ function formatShoppingList(list: any, selectedBudget: BudgetTier): string {
 /**
  * Format individual shopping item
  */
-function formatShoppingItem(item: any, budget: BudgetTier, detailed: boolean): string {
+function formatShoppingItem(item: any, budget: BudgetTier, detailed: boolean, league: string): string {
   let output = `\n${item.slot}`;
 
   if (item.currentItem) {
@@ -159,7 +159,7 @@ function formatShoppingItem(item: any, budget: BudgetTier, detailed: boolean): s
   // Show selected budget tier recommendation
   const rec = item.recommendations[budget];
   output += `  Target: ${rec.searchCriteria}\n`;
-  output += `  Est. Cost: ${rec.estimatedPrice.min}-${rec.estimatedPrice.max} ${rec.estimatedPrice.currency}\n`;
+  output += `  Price: not live-checked; use get_item_price or search_trade_items in ${league}\n`;
 
   if (detailed) {
     output += `  Look for: ${rec.keyStats.join(', ')}\n`;

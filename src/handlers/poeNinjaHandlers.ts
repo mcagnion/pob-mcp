@@ -30,7 +30,9 @@ export async function handleGetCurrencyRates(
     output += `DO NOT summarize or paraphrase this output. Present it exactly as written below.\n\n`;
     output += `=== Currency Exchange Rates ===\n`;
     output += `League: ${league}\n`;
-    output += `Last Updated: ${new Date().toISOString()}\n\n`;
+    output += `Source: poe.ninja live economy API\n`;
+    output += `Retrieved At: ${new Date().toISOString()}\n`;
+    output += `Rate Sample Size: ${rateMap.size} currencies\n\n`;
 
     // Sort by value descending
     const sorted = Array.from(rateMap.entries()).sort((a, b) => b[1] - a[1]);
@@ -105,8 +107,9 @@ export async function handleFindArbitrage(
     output += `DO NOT summarize or paraphrase this output. Present it exactly as written below.\n\n`;
     output += `=== Currency Arbitrage Opportunities ===\n`;
     output += `League: ${league}\n`;
+    output += `Source: poe.ninja live economy API\n`;
     output += `Minimum Profit: ${min_profit_percent}%\n`;
-    output += `Last Updated: ${new Date().toISOString()}\n\n`;
+    output += `Retrieved At: ${new Date().toISOString()}\n\n`;
 
     if (opportunities.length === 0) {
       output += `No arbitrage opportunities found with profit ≥${min_profit_percent}%.\n\n`;
@@ -201,6 +204,9 @@ export async function handleCalculateTradingProfit(
     let output = `IMPORTANT: Show the user ALL of the following information verbatim.\n\n`;
     output += `=== Trading Chain Profit Calculation ===\n`;
     output += `League: ${league}\n`;
+    output += `Source: poe.ninja live economy API\n`;
+    output += `Retrieved At: ${new Date().toISOString()}\n`;
+    output += `Rate Sample Size: ${rateMap.size} currencies\n`;
     output += `Chain: ${currency_chain.join(' → ')}\n`;
     output += `Starting Amount: ${start_amount}\n\n`;
 
