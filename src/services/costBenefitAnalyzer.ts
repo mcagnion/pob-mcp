@@ -244,39 +244,32 @@ export class CostBenefitAnalyzer {
     const amount = price.amount;
     const currency = price.currency;
 
-    // Standard conversions (these should be dynamic in production)
-    const defaultRates: Record<string, number> = {
-      'chaos': 1,
-      'divine': 180, // Example rate
-      'exalted': 20, // Example rate
-      'mirror': 100000, // Example rate
-      'vaal': 0.5,
-      'fusing': 0.4,
-      'alchemy': 0.3,
-      'chisel': 0.2,
-    };
+    if (currency === 'chaos') return amount;
 
-    const rate = currencyRates?.get(currency) || defaultRates[currency] || 1;
-    return amount * rate;
+    const liveRate = currencyRates?.get(currency);
+    if (!liveRate || liveRate <= 0) return 0;
+
+    return amount * liveRate;
   }
 
   /**
    * Calculate all cost/benefit metrics
    */
   private calculateMetrics(stats: StatExtraction, priceInChaos: number): CostBenefitMetrics {
-    const price = priceInChaos || 1; // Avoid division by zero
+    const hasComparablePrice = priceInChaos > 0;
+    const price = hasComparablePrice ? priceInChaos : 1; // Avoid division by zero
     const warnings: string[] = [];
 
     // Calculate efficiency metrics
-    const lifePerChaos = stats.life / price;
-    const esPerChaos = stats.es / price;
-    const totalResistPerChaos = stats.totalResist / price;
-    const armourPerChaos = stats.armour / price;
-    const evasionPerChaos = stats.evasion / price;
-    const dpsPerChaos = stats.totalDPS ? stats.totalDPS / price : undefined;
+    const lifePerChaos = hasComparablePrice ? stats.life / price : 0;
+    const esPerChaos = hasComparablePrice ? stats.es / price : 0;
+    const totalResistPerChaos = hasComparablePrice ? stats.totalResist / price : 0;
+    const armourPerChaos = hasComparablePrice ? stats.armour / price : 0;
+    const evasionPerChaos = hasComparablePrice ? stats.evasion / price : 0;
+    const dpsPerChaos = hasComparablePrice && stats.totalDPS ? stats.totalDPS / price : undefined;
 
     // Composite metrics
-    const ehpPerChaos = (stats.life + stats.es / 2) / price;
+    const ehpPerChaos = hasComparablePrice ? (stats.life + stats.es / 2) / price : 0;
     const defensiveValuePerChaos = (
       lifePerChaos * 2 +
       esPerChaos +
@@ -289,22 +282,24 @@ export class CostBenefitAnalyzer {
     // Calculate overall value score (0-100)
     let valueScore = 0;
 
-    // Life efficiency (0-25 points)
-    valueScore += Math.min(25, lifePerChaos * 2.5);
+    if (hasComparablePrice) {
+      // Life efficiency (0-25 points)
+      valueScore += Math.min(25, lifePerChaos * 2.5);
 
-    // ES efficiency (0-15 points)
-    valueScore += Math.min(15, esPerChaos * 1.5);
+      // ES efficiency (0-15 points)
+      valueScore += Math.min(15, esPerChaos * 1.5);
 
-    // Resist efficiency (0-30 points)
-    valueScore += Math.min(30, totalResistPerChaos * 3);
+      // Resist efficiency (0-30 points)
+      valueScore += Math.min(30, totalResistPerChaos * 3);
 
-    // Defense efficiency (0-15 points)
-    const defenseScore = (armourPerChaos + evasionPerChaos) * 0.01;
-    valueScore += Math.min(15, defenseScore);
+      // Defense efficiency (0-15 points)
+      const defenseScore = (armourPerChaos + evasionPerChaos) * 0.01;
+      valueScore += Math.min(15, defenseScore);
 
-    // DPS efficiency (0-15 points)
-    if (dpsPerChaos) {
-      valueScore += Math.min(15, dpsPerChaos * 0.05);
+      // DPS efficiency (0-15 points)
+      if (dpsPerChaos) {
+        valueScore += Math.min(15, dpsPerChaos * 0.05);
+      }
     }
 
     // Determine value tier
@@ -315,12 +310,12 @@ export class CostBenefitAnalyzer {
     else valueTier = 'poor';
 
     // Budget/Premium classification
-    const isBudgetPick = valueScore >= 60 && priceInChaos < 50;
-    const isPremiumPick = valueScore >= 70 && priceInChaos >= 100;
+    const isBudgetPick = hasComparablePrice && valueScore >= 60 && priceInChaos < 50;
+    const isPremiumPick = hasComparablePrice && valueScore >= 70 && priceInChaos >= 100;
 
     // Generate warnings
-    if (priceInChaos === 0) {
-      warnings.push('No price listed - value metrics unavailable');
+    if (!hasComparablePrice) {
+      warnings.push('No live chaos-equivalent price available - value metrics unavailable');
     }
     if (stats.life === 0 && stats.es === 0) {
       warnings.push('No life or ES - poor survivability');

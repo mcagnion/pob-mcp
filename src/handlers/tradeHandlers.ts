@@ -27,6 +27,40 @@ function getTradeItemUrl(league: string, searchId: string, itemId: string): stri
   return `https://www.pathofexile.com/trade/search/${encodeURIComponent(league)}/${searchId}#${itemId}`;
 }
 
+const THIN_MARKET_TOTAL_THRESHOLD = 10;
+const LOW_PRICED_SAMPLE_THRESHOLD = 5;
+
+function formatTradeMarketData(args: {
+  league?: string;
+  searchId?: string;
+  totalResults?: number;
+  fetchedSampleSize?: number;
+  pricedSampleSize?: number;
+  source?: string;
+}): string {
+  const source = args.source || 'Path of Exile Trade API live search';
+  let output = `Market Data:\n`;
+  output += `  Source: ${source}\n`;
+  if (args.league) output += `  League: ${args.league}\n`;
+  output += `  Retrieved At: ${new Date().toISOString()}\n`;
+  if (args.searchId) output += `  Search ID: ${args.searchId}\n`;
+  if (args.totalResults !== undefined) output += `  Total Listings: ${args.totalResults}\n`;
+  if (args.fetchedSampleSize !== undefined) output += `  Fetched Sample: ${args.fetchedSampleSize} listings\n`;
+  if (args.pricedSampleSize !== undefined) {
+    output += `  Priced Sample: ${args.pricedSampleSize}`;
+    if (args.fetchedSampleSize !== undefined) output += `/${args.fetchedSampleSize}`;
+    output += ` listings\n`;
+  }
+
+  const thinTotal = args.totalResults !== undefined && args.totalResults < THIN_MARKET_TOTAL_THRESHOLD;
+  const lowPricedSample = args.pricedSampleSize !== undefined && args.pricedSampleSize < LOW_PRICED_SAMPLE_THRESHOLD;
+  if (thinTotal || lowPricedSample) {
+    output += `  Warning: thin market or low priced sample; treat numeric prices as indicative, not authoritative.\n`;
+  }
+
+  return output;
+}
+
 /**
  * Search the Path of Exile trade site for items
  */
@@ -107,11 +141,18 @@ export async function handleSearchTradeItems(
     const searchResult = await context.tradeClient.searchItems(league, query);
 
     if (!searchResult.result || searchResult.result.length === 0) {
+      const marketData = formatTradeMarketData({
+        league,
+        searchId: searchResult.id,
+        totalResults: searchResult.total,
+        fetchedSampleSize: 0,
+        pricedSampleSize: 0,
+      });
       return {
         content: [
           {
             type: 'text',
-            text: `No items found matching your search criteria in ${league} league.`,
+            text: `No items found matching your search criteria in ${league} league.\n\n${marketData}`,
           },
         ],
       };
@@ -176,11 +217,18 @@ export async function handleGetItemPrice(
     const searchResult = await context.tradeClient.searchItems(league, query);
 
     if (!searchResult.result || searchResult.result.length === 0) {
+      const marketData = formatTradeMarketData({
+        league,
+        searchId: searchResult.id,
+        totalResults: searchResult.total,
+        fetchedSampleSize: 0,
+        pricedSampleSize: 0,
+      });
       return {
         content: [
           {
             type: 'text',
-            text: `No price data found for "${item_name}" in ${league}.`,
+            text: `No price data found for "${item_name}" in ${league}.\n\n${marketData}`,
           },
         ],
       };
@@ -200,11 +248,18 @@ export async function handleGetItemPrice(
       }));
 
     if (prices.length === 0) {
+      const marketData = formatTradeMarketData({
+        league,
+        searchId: searchResult.id,
+        totalResults: searchResult.total,
+        fetchedSampleSize: items.length,
+        pricedSampleSize: 0,
+      });
       return {
         content: [
           {
             type: 'text',
-            text: `No priced listings found for "${item_name}" in ${league}.`,
+            text: `No priced listings found for "${item_name}" in ${league}.\n\n${marketData}`,
           },
         ],
       };
@@ -221,8 +276,14 @@ export async function handleGetItemPrice(
 
     // Format output
     let output = `=== Price Check: ${item_name} ===\n`;
-    output += `League: ${league}\n`;
-    output += `Total Listings: ${searchResult.total}\n\n`;
+    output += formatTradeMarketData({
+      league,
+      searchId: searchResult.id,
+      totalResults: searchResult.total,
+      fetchedSampleSize: items.length,
+      pricedSampleSize: prices.length,
+    });
+    output += `\n`;
 
     for (const [currency, amounts] of byCurrency.entries()) {
       amounts.sort((a, b) => a - b);
@@ -360,12 +421,24 @@ async function getCurrencyRatesMap(ninjaClient: PoeNinjaClient | undefined, leag
 }
 
 async function formatSearchResults(items: ItemListing[], totalResults: number, league: string, searchId: string, ninjaClient?: PoeNinjaClient): Promise<string> {
-  let output = `=== Trade Search (${league}) ===\n`;
-  output += `Found: ${totalResults} | Showing: ${items.length}\n`;
-  output += `🔗 ${getTradeSearchUrl(league, searchId)}\n\n`;
-
   // Fetch real-time currency rates from poe.ninja
   const currencyRates = await getCurrencyRatesMap(ninjaClient, league);
+  const pricedSampleSize = items.filter((item) => Boolean(item.listing.price)).length;
+
+  let output = `=== Trade Search (${league}) ===\n`;
+  output += formatTradeMarketData({
+    league,
+    searchId,
+    totalResults,
+    fetchedSampleSize: items.length,
+    pricedSampleSize,
+  });
+  output += `  Trade URL: ${getTradeSearchUrl(league, searchId)}\n`;
+  if (currencyRates.size > 0) {
+    output += `  Currency Conversion: poe.ninja live rates (${currencyRates.size} rates)\n\n`;
+  } else {
+    output += `  Currency Conversion: unavailable; non-chaos prices are not converted and value rankings may be incomplete.\n\n`;
+  }
 
   // Analyze items for cost/benefit with real rates
   const analyzer = new CostBenefitAnalyzer();
@@ -673,7 +746,12 @@ function formatItemRecommendations(
   includeLinks: boolean = false
 ): string {
   let output = `=== ${slot} Upgrades (${league}) ===\n`;
-  output += `${recommendations.length} found\n\n`;
+  output += formatTradeMarketData({
+    league,
+    fetchedSampleSize: recommendations.length,
+    pricedSampleSize: recommendations.filter((rec) => Boolean(rec.listing.listing.price)).length,
+  });
+  output += `\n`;
 
   for (const rec of recommendations) {
     const item = rec.listing.item;
@@ -734,7 +812,12 @@ function formatResistanceRecommendations(
 
   let output = `=== Resistance Gear (${league}) ===\n`;
   output += `Need: ${targets.join(', ')}\n`;
-  output += `${recommendations.length} found\n\n`;
+  output += formatTradeMarketData({
+    league,
+    fetchedSampleSize: recommendations.length,
+    pricedSampleSize: recommendations.filter((rec) => Boolean(rec.listing.listing.price)).length,
+  });
+  output += `\n`;
 
   for (const rec of recommendations) {
     const item = rec.listing.item;
@@ -792,6 +875,7 @@ export async function handleCompareTradeItems(
   context: TradeContext,
   args: {
     item_ids: string[];
+    league?: string;
     build_context?: {
       life_needed?: number;
       es_needed?: number;
@@ -808,7 +892,7 @@ export async function handleCompareTradeItems(
   }>;
 }> {
   return wrapHandler('compare trade items', async () => {
-    const { item_ids, build_context } = args;
+    const { item_ids, league, build_context } = args;
 
     if (!item_ids || item_ids.length === 0) {
       return {
@@ -830,7 +914,7 @@ export async function handleCompareTradeItems(
       };
     }
 
-    const output = formatItemComparison(items, build_context);
+    const output = formatItemComparison(items, build_context, league);
     return { content: [{ type: 'text', text: output }] };
   });
 }
@@ -844,9 +928,17 @@ function formatItemComparison(
     fire_resist_needed?: number;
     cold_resist_needed?: number;
     lightning_resist_needed?: number;
-  }
+  },
+  league?: string
 ): string {
   let output = `=== Item Comparison (${items.length}) ===\n\n`;
+  const listingLeague = league || items.find((listing) => listing.item.league)?.item.league;
+  output += formatTradeMarketData({
+    league: listingLeague,
+    fetchedSampleSize: items.length,
+    pricedSampleSize: items.filter((listing) => Boolean(listing.listing.price)).length,
+  });
+  output += `\n`;
 
   const itemStats = items.map(listing => {
     const item = listing.item;
