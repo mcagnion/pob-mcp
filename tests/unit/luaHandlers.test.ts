@@ -56,7 +56,7 @@ describe('handleLuaGetStats', () => {
 });
 
 describe('handleUpdateTreeDelta', () => {
-  it('labels update_tree_delta as a stateful mutation, not an isolated what-if', async () => {
+  it('labels update_tree_delta as stateful only when apply=true', async () => {
     const luaClient = {
       getTree: jest.fn(async () => ({
         nodes: [1, 2],
@@ -66,13 +66,12 @@ describe('handleUpdateTreeDelta', () => {
       })),
     };
 
-    const result = await handleUpdateTreeDelta(makeContext(luaClient), ['123'], undefined);
+    const result = await handleUpdateTreeDelta(makeContext(luaClient), ['123'], undefined, true);
     const text = result.content[0].text;
 
     expect(luaClient.updateTreeDelta).toHaveBeenCalledWith({ addNodes: [123] });
     expect(text).toContain('STATEFUL TREE MUTATION');
-    expect(text).toContain('not an isolated what-if calculator');
-    expect(text).toContain('does not return an undo token');
+    expect(text).toContain('apply=true');
     expect(text).toContain('lua_reload_build');
     expect(text).toContain('Tree delta applied');
     expect(text).toContain('Actual added: 123');

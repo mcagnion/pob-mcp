@@ -12,21 +12,20 @@ function makeContext(luaClient: any) {
 }
 
 describe('handleUpdateTreeDelta guardrails', () => {
-  it('reports the actual before/after tree diff for stateful mutations', async () => {
+  it('reports the actual before/after tree diff for explicit stateful mutations', async () => {
     const luaClient = {
       getTree: jest.fn(async () => ({ nodes: [1, 2, 3] })),
       updateTreeDelta: jest.fn(async () => ({ tree: { nodes: [1, 2, 4, 5] } })),
     };
 
-    const result = await handleUpdateTreeDelta(makeContext(luaClient), ['4'], ['3']);
+    const result = await handleUpdateTreeDelta(makeContext(luaClient), ['4'], ['3'], true);
     const text = result.content[0].text;
 
     expect(luaClient.getTree.mock.invocationCallOrder[0])
       .toBeLessThan(luaClient.updateTreeDelta.mock.invocationCallOrder[0]);
     expect(luaClient.updateTreeDelta).toHaveBeenCalledWith({ addNodes: [4], removeNodes: [3] });
     expect(text).toContain('STATEFUL TREE MUTATION');
-    expect(text).toContain('not an isolated what-if calculator');
-    expect(text).toContain('does not return an undo token');
+    expect(text).toContain('apply=true');
     expect(text).toContain('lua_reload_build');
     expect(text).toContain('Requested add_nodes: 4');
     expect(text).toContain('Requested remove_nodes: 3');

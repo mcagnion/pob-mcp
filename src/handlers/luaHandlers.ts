@@ -630,7 +630,7 @@ function formatNodeIds(nodes: number[]): string {
   return nodes.length > 40 ? `${shown}, ... (${nodes.length - 40} more)` : shown;
 }
 
-export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes?: string[], removeNodes?: string[]) {
+export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes?: string[], removeNodes?: string[], apply?: boolean) {
   return wrapHandler('update tree delta', async () => {
     await context.ensureLuaClient();
     const luaClient = context.getLuaClient();
@@ -642,9 +642,10 @@ export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes
 
     const requestedAdds = parseTreeNodeIds(addNodes, 'add_nodes');
     const requestedRemoves = parseTreeNodeIds(removeNodes, 'remove_nodes');
-    const params: { addNodes?: number[]; removeNodes?: number[] } = {};
+    const params: { addNodes?: number[]; removeNodes?: number[]; restoreAfter?: boolean } = {};
     if (requestedAdds.length) params.addNodes = requestedAdds;
     if (requestedRemoves.length) params.removeNodes = requestedRemoves;
+    if (apply !== true) params.restoreAfter = true;
 
     const beforeTree = await luaClient.getTree();
     const beforeIds = normalizeTreeNodeIds(beforeTree?.nodes);
@@ -653,6 +654,8 @@ export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes
     const tree = result?.tree;
     const afterIds = normalizeTreeNodeIds(tree?.nodes);
     const afterSet = new Set(afterIds);
+    const restoredIds = normalizeTreeNodeIds(result?.restoredTree?.nodes);
+    const restoredSet = new Set(restoredIds);
     const autoPathedNodes = result?.autoPathedNodes;
     const skippedAsc = result?.skippedAscendancyNodes;
 
@@ -664,14 +667,29 @@ export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes
     const requestedRemovesStillAllocated = requestedRemoves.filter((node) => afterSet.has(node));
     const extraAdded = actualAdded.filter((node) => !requestedAddSet.has(node));
     const unrequestedRemoved = actualRemoved.filter((node) => !requestedRemoveSet.has(node));
+    const restoredExtraAdded = result?.restored ? without(restoredIds, beforeSet) : [];
+    const restoredMissingOriginal = result?.restored ? without(beforeIds, restoredSet) : [];
 
-    let text = `⚠️ STATEFUL TREE MUTATION\n`;
-    text += `This tool modifies the currently loaded passive tree. It is not an isolated what-if calculator and does not return an undo token.\n`;
-    text += `Use suggest_optimal_nodes for measured passive ranking, or call lua_reload_build after inspection to restore the build from disk.\n\n`;
-    text += `✅ Tree delta applied.\n`;
+    let text = '';
+    if (result?.restored) {
+      text += `✅ Tree delta previewed; loaded passive tree restored.\n`;
+      text += `PoB applied the requested delta, returned the resulting allocation, then restored the original loaded tree.\n\n`;
+    } else if (apply === true) {
+      text += `⚠️ STATEFUL TREE MUTATION\n`;
+      text += `This tool modified the currently loaded passive tree because apply=true was set.\n`;
+      text += `Call lua_reload_build after inspection if you need to restore the build from disk.\n\n`;
+      text += `✅ Tree delta applied.\n`;
+    } else {
+      text += `⚠️ RESTORE-AFTER PREVIEW NOT CONFIRMED\n`;
+      text += `Requested isolated preview, but the PoB bridge did not report restoration support. Treat the currently loaded tree as mutated and call lua_reload_build if needed.\n\n`;
+      text += `✅ Tree delta applied.\n`;
+    }
     if (requestedAdds.length) text += `  Requested add_nodes: ${formatNodeIds(requestedAdds)}\n`;
     if (requestedRemoves.length) text += `  Requested remove_nodes: ${formatNodeIds(requestedRemoves)}\n`;
     text += `  Total allocated: ${afterIds.length} nodes (before: ${beforeIds.length})\n`;
+    if (result?.restored) {
+      text += `  Restored allocation: ${restoredIds.length} nodes\n`;
+    }
     text += `\nActual tree diff:\n`;
     text += `  Actual added: ${formatNodeIds(actualAdded)}\n`;
     text += `  Actual removed: ${formatNodeIds(actualRemoved)}\n`;
@@ -687,6 +705,11 @@ export async function handleUpdateTreeDelta(context: LuaHandlerContext, addNodes
     }
     if (unrequestedRemoved.length > 0) {
       text += `  Unrequested nodes removed/dropped by import: ${formatNodeIds(unrequestedRemoved)}\n`;
+    }
+    if (result?.restored && (restoredExtraAdded.length > 0 || restoredMissingOriginal.length > 0)) {
+      text += `  Restore verification warning: restored tree differs from the original snapshot.\n`;
+      text += `    Restored extra nodes: ${formatNodeIds(restoredExtraAdded)}\n`;
+      text += `    Original nodes missing after restore: ${formatNodeIds(restoredMissingOriginal)}\n`;
     }
 
     if (autoPathedNodes && autoPathedNodes.length > 0) {
