@@ -50,6 +50,19 @@ describe('buildCraftingResponse', () => {
     });
     expect(result).toContain('200');
   });
+
+  it('warns that static crafting mechanics must be verified against current data', () => {
+    const result = buildCraftingResponse({
+      base: 'Hubris Circlet',
+      slot: 'helmet',
+      desiredMods: [],
+      modData: '=== poedb data ===\nsome mod info',
+      currencyRates: { chaos: 1, divine: 200 },
+      buildContext: null,
+    });
+    expect(result).toContain('Mechanics Freshness');
+    expect(result).toContain('current PoB/poedb/trade data');
+  });
 });
 
 describe('handleSuggestCrafting — graceful degradation', () => {

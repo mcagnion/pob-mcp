@@ -786,7 +786,7 @@ export function getLuaToolSchemas(): any[] {
     },
     {
       name: "find_item_upgrades",
-      description: "Generate a shopping spec for a gear slot — describes what item type, base, and mods to look for based on the build's current gaps (resistances, life, ES, DPS). Works with a loaded build in the Lua bridge. No trade API required.",
+      description: "Generate a shopping spec for a gear slot — describes what item type, base, and mods to look for based on the build's current gaps (resistances, life, ES, DPS). Works with a loaded build in the Lua bridge. No trade API required. Static slot/base notes are version-sensitive; verify enchants, Eldritch, influence, Harvest, Heist/Hillock quality, corruption, and Watcher's Eye mechanics against current PoB or live trade data before treating them as available.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1141,7 +1141,7 @@ export function getSkillGemToolSchemas(): any[] {
     },
     {
       name: "validate_gem_quality",
-      description: "Check all gems for quality and level improvements. Identifies missing quality, Exceptional upgrade opportunities, and corruption targets.",
+      description: "Check all gems for quality and level improvements. Identifies missing quality, Exceptional upgrade opportunities, and corruption targets. Gem quality/corruption/Exceptional availability is version-sensitive; verify with current PoB gem data and post-change stat readback before buying or corrupting.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1189,7 +1189,7 @@ export function getSkillGemToolSchemas(): any[] {
     },
     {
       name: "gem_upgrade_path",
-      description: "Generate a prioritized gem upgrade shopping list showing which gems to level, quality, and upgrade to Exceptional versions, ordered by impact and budget",
+      description: "Generate a prioritized gem upgrade shopping list showing which gems to level, quality, and upgrade to Exceptional versions, ordered by impact and budget. Gem quality/corruption/Exceptional availability is version-sensitive; verify with current PoB gem data and post-change stat readback before buying or corrupting.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1626,7 +1626,7 @@ export function getBuildGoalsToolSchemas(): any[] {
     },
     {
       name: "suggest_crafting",
-      description: "Recommend the best crafting method for an item. Provide a gear slot and optionally a base type and desired mods. If a build is loaded, auto-detects the equipped base and build gaps.",
+      description: "Recommend the best crafting method for an item. Provide a gear slot and optionally a base type and desired mods. If a build is loaded, auto-detects the equipped base and build gaps. Method guidance is version-sensitive; verify Harvest, Eldritch, influence, fracture, synthesis, enchant, and quality mechanics against current PoB/poedb/trade data before giving deterministic steps.",
       inputSchema: {
         type: "object",
         properties: {

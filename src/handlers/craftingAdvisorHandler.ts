@@ -32,6 +32,9 @@ const CRAFTING_METHODS = `
 8. **Meta-crafting** — "Prefixes Cannot Be Changed" / "Suffixes Cannot Be Changed" / "Cannot Roll Attack Mods". Lets you safely scour half the item.
 `;
 
+const CRAFTING_FRESHNESS_NOTE =
+  'poedb mod data is current only when the fetch succeeds; the method list is static guidance. Verify Harvest, Eldritch, influence, fracture, synthesis, enchant, and quality mechanics against current PoB/poedb/trade data before giving deterministic steps.';
+
 /**
  * Builds the crafting advisor response text from structured input.
  * Pure function — no async, no side effects — so it is easily unit tested.
@@ -66,6 +69,9 @@ export function buildCraftingResponse(input: CraftingResponseInput): string {
 
   text += `## Currency Rates\n`;
   text += `- 1 Divine Orb = ${currencyRates.divine} Chaos Orb\n\n`;
+
+  text += `## Mechanics Freshness\n`;
+  text += `- ${CRAFTING_FRESHNESS_NOTE}\n\n`;
 
   text += CRAFTING_METHODS + '\n';
 
