@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node build/index.js",
     "dev": "tsc --watch",
+    "smoke:cluster-jewels": "npm run build && node tests/smoke/cluster-jewel-notables.smoke.mjs",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
