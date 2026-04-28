@@ -444,7 +444,7 @@ export function getLuaToolSchemas(): any[] {
     },
     {
       name: "search_tree_nodes",
-      description: "Search passive tree for nodes matching specific criteria",
+      description: "Search passive tree for nodes matching specific criteria. Output includes explicit allocation status for each result; use it before reasoning about passive effects. For mutually exclusive or pick-one passive choices, inspect all sibling options and cite which result is allocated.",
       inputSchema: {
         type: "object",
         properties: {
@@ -459,6 +459,10 @@ export function getLuaToolSchemas(): any[] {
           limit: {
             type: "number",
             description: "Maximum results to return (default: 20)",
+          },
+          include_allocated: {
+            type: "boolean",
+            description: "Include allocation markers for the currently loaded build and keep allocated matches visible when supported by the Lua bridge.",
           },
         },
         required: ["query"],
