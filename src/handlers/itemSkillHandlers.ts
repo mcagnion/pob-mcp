@@ -48,6 +48,116 @@ const ITEM_TRAILER_LINES = new Set([
 
 interface ModLine { line: string; type: string; }
 
+const GEM_QUALITY_VERIFICATION_FIELDS = [
+  'FullDPS',
+  'FullDotDPS',
+  'TotalDPS',
+  'CombinedDPS',
+  'TotalDotDPS',
+  'Speed',
+  'ManaCost',
+];
+
+function getNumericStat(stats: Record<string, any> | null, field: string): number | null {
+  if (!stats || stats[field] == null) return null;
+  const value = Number(stats[field]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function formatNumber(value: number): string {
+  return Number.isInteger(value) ? value.toLocaleString() : value.toLocaleString(undefined, { maximumFractionDigits: 3 });
+}
+
+function formatStatDelta(field: string, before: number | null, after: number | null): string | null {
+  if (before == null && after == null) return null;
+  if (before == null) return `${field}: ${formatNumber(after as number)} (post-mutation)`;
+  if (after == null) return `${field}: unavailable after mutation (was ${formatNumber(before)})`;
+  const delta = after - before;
+  const sign = delta > 0 ? '+' : '';
+  return `${field}: ${formatNumber(before)} -> ${formatNumber(after)} (${sign}${formatNumber(delta)})`;
+}
+
+async function readStatsForGemQuality(luaClient: PoBLuaApiClient): Promise<Record<string, any> | null> {
+  try {
+    return await luaClient.getStats(GEM_QUALITY_VERIFICATION_FIELDS);
+  } catch {
+    return null;
+  }
+}
+
+async function readGemAfterMutation(
+  luaClient: PoBLuaApiClient,
+  groupIndex: number,
+  gemIndex: number
+): Promise<{ name?: string; quality?: number; qualityId?: string } | null> {
+  try {
+    const skills = await luaClient.getSkills();
+    const groups = Array.isArray(skills?.groups) ? skills.groups : [];
+    const group = groups.find((g: any) => Number(g.index) === Number(groupIndex));
+    const gems = Array.isArray(group?.gems)
+      ? group.gems
+      : (Array.isArray(group?.gemList) ? group.gemList : []);
+    const gem = gems[gemIndex - 1];
+    if (!gem) return null;
+    const qualityValue = gem.quality == null ? undefined : Number(gem.quality);
+    return {
+      name: gem.name ?? gem.nameSpec ?? gem.gemName,
+      quality: Number.isFinite(qualityValue) ? qualityValue : undefined,
+      qualityId: gem.qualityId,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function formatGemQualityVerification(
+  targetQuality: number,
+  beforeStats: Record<string, any> | null,
+  afterStats: Record<string, any> | null,
+  gemAfter: { name?: string; quality?: number; qualityId?: string } | null
+): string {
+  const lines = [
+    '',
+    'Post-mutation verification:',
+    `  Freshness marker: retrievedAt=${new Date().toISOString()}`,
+  ];
+
+  if (gemAfter) {
+    const name = gemAfter.name ? `${gemAfter.name} ` : '';
+    const qualityText = gemAfter.quality == null ? 'unknown quality' : `Q${gemAfter.quality}`;
+    const qualityId = gemAfter.qualityId && gemAfter.qualityId !== 'Default' ? ` (${gemAfter.qualityId})` : '';
+    const confirmed = gemAfter.quality === targetQuality ? 'confirmed' : 'not confirmed';
+    lines.push(`  Gem readback: ${name}${qualityText}${qualityId} — target Q${targetQuality} ${confirmed}`);
+  } else {
+    lines.push('  Gem readback: unavailable; verify with get_skill_setup before using deltas.');
+  }
+
+  const statLines = GEM_QUALITY_VERIFICATION_FIELDS
+    .map(field => formatStatDelta(field, getNumericStat(beforeStats, field), getNumericStat(afterStats, field)))
+    .filter((line): line is string => Boolean(line));
+
+  if (statLines.length > 0) {
+    lines.push('  Stats readback:');
+    for (const line of statLines) {
+      lines.push(`    - ${line}`);
+    }
+
+    const changed = GEM_QUALITY_VERIFICATION_FIELDS.some(field => {
+      const before = getNumericStat(beforeStats, field);
+      const after = getNumericStat(afterStats, field);
+      return before != null && after != null && before !== after;
+    });
+
+    if (!changed) {
+      lines.push('  Note: no tracked stat changed. This can mean the quality has no modeled impact for the selected skill/setup; verify the active skill before ranking quality upgrades.');
+    }
+  } else {
+    lines.push('  Stats readback: unavailable; call lua_get_stats after this mutation before making DPS claims.');
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
 /**
  * Parse PoB internal item raw text to extract mod lines.
  * Handles both formats: with and without "Rarity:" prefix.
@@ -493,13 +603,18 @@ export async function handleSetGemQuality(
       throw new Error('gem_index must be >= 1');
     }
 
-    if (quality < 0 || quality > 30) {
-      throw new Error('quality must be between 0 and 30');
+    if (quality < 0 || quality > 23) {
+      throw new Error('quality must be between 0 and 23');
     }
+
+    const beforeStats = await readStatsForGemQuality(luaClient);
 
     await luaClient.setGemQuality({ groupIndex, gemIndex, quality, qualityId });
 
     let text = `✅ Set gem quality to ${quality}${qualityId && qualityId !== 'Default' ? ` (${qualityId})` : ''} (group ${groupIndex}, gem ${gemIndex}).`;
+    const gemAfter = await readGemAfterMutation(luaClient, groupIndex, gemIndex);
+    const afterStats = await readStatsForGemQuality(luaClient);
+    text += formatGemQualityVerification(quality, beforeStats, afterStats, gemAfter);
 
     return {
       content: [
