@@ -421,6 +421,80 @@ describe('PoBLuaApiClient', () => {
     });
   });
 
+  describe('evaluateAnointCandidates', () => {
+    beforeEach(async () => {
+      await client.start();
+      mockProcess = mockSpawn.getLastProcess()!;
+    });
+
+    it('maps current anoint metadata and secondary stat deltas', async () => {
+      mockProcess.registerResponse('evaluate_anoint_candidates', {
+        ok: true,
+        slot: 'Amulet',
+        baseType: 'Amulet',
+        focus: 'both',
+        dpsMetric: 'FullDPS',
+        base: { DPS: 2000, CombinedDPS: 1000, FullDPS: 2000, TotalEHP: 5000 },
+        current: { DPS: 2020, CombinedDPS: 1020, FullDPS: 2020, TotalEHP: 5000 },
+        currentAnoint: {
+          nodeId: 101,
+          name: 'Fleetfoot',
+          statLines: ['5% increased Movement Speed'],
+          dpsDelta: 20,
+          ehpDelta: 0,
+          dpsMetric: 'FullDPS',
+        },
+        evaluated: 1,
+        skipped: 0,
+        candidates: [
+          {
+            nodeId: 202,
+            name: 'Destroyer',
+            statLines: ['20% increased Attack Damage'],
+            dpsDelta: 120,
+            ehpDelta: 0,
+            swapDpsDelta: 100,
+            swapEhpDelta: 0,
+            dpsMetric: 'FullDPS',
+            score: 0.12,
+            recipe: ['ClearOil', 'AmberOil', 'GoldenOil'],
+            statDeltas: [
+              {
+                stat: 'EffectiveMovementSpeedMod',
+                label: 'Movement Speed Modifier',
+                delta: -5,
+                current: 15,
+                candidate: 10,
+              },
+            ],
+          },
+        ],
+      });
+
+      const result = await client.evaluateAnointCandidates({ slot: 'Amulet', focus: 'both', limit: 3 });
+
+      expect(mockProcess.getLastRequest()).toEqual({
+        action: 'evaluate_anoint_candidates',
+        params: { slot: 'Amulet', focus: 'both', limit: 3 },
+      });
+      expect(result.currentAnoint?.name).toBe('Fleetfoot');
+      expect(result.dpsMetric).toBe('FullDPS');
+      expect(result.base.DPS).toBe(2000);
+      expect(result.base.FullDPS).toBe(2000);
+      expect(result.current?.CombinedDPS).toBe(1020);
+      expect(result.current?.FullDPS).toBe(2020);
+      expect(result.candidates[0].statLines).toEqual(['20% increased Attack Damage']);
+      expect(result.candidates[0].swapDpsDelta).toBe(100);
+      expect(result.candidates[0].dpsMetric).toBe('FullDPS');
+      expect(result.candidates[0].statDeltas?.[0]).toEqual(expect.objectContaining({
+        label: 'Movement Speed Modifier',
+        delta: -5,
+        current: 15,
+        candidate: 10,
+      }));
+    });
+  });
+
   describe('Error Handling', () => {
     it('should handle process crash', async () => {
       await client.start();
