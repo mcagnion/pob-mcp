@@ -11,6 +11,34 @@ export interface SkillGemHandlerContext {
   ensureLuaClient?: () => Promise<void>;
 }
 
+const GEM_QUALITY_PREVIEW_FIELDS = [
+  'FullDPS',
+  'FullDotDPS',
+  'TotalDPS',
+  'CombinedDPS',
+  'TotalDotDPS',
+  'Speed',
+  'ManaCost',
+];
+
+const GEM_QUALITY_DPS_PRIORITY_FIELDS = [
+  'FullDPS',
+  'TotalDPS',
+  'CombinedDPS',
+  'FullDotDPS',
+  'TotalDotDPS',
+];
+
+interface GemQualityMeasurement {
+  restored: boolean;
+  before: Record<string, any>;
+  after: Record<string, any>;
+  restoredStats?: Record<string, any>;
+  targetQuality: number;
+  dpsScore: number | null;
+  error?: string;
+}
+
 function formatGemLocation(location?: {
   skillIndex: number;
   groupIndex: number;
@@ -22,6 +50,132 @@ function formatGemLocation(location?: {
     return "unknown location";
   }
   return `slot=${location.slot}, group_index=${location.groupIndex}, skill_index=${location.skillIndex}, gem_index=${location.gemIndex}, active_skill=${location.activeSkillName}`;
+}
+
+function formatNumber(value: number): string {
+  return Number.isInteger(value)
+    ? value.toLocaleString('en-US')
+    : value.toLocaleString('en-US', { maximumFractionDigits: 3 });
+}
+
+function numericStat(stats: Record<string, any> | undefined, field: string): number | null {
+  if (!stats || stats[field] == null) return null;
+  const value = Number(stats[field]);
+  return Number.isFinite(value) ? value : null;
+}
+
+function formatMeasuredDelta(field: string, before: number, after: number): string {
+  const delta = after - before;
+  const sign = delta > 0 ? '+' : '';
+  const percent = before !== 0
+    ? `, ${sign}${formatNumber((delta / before) * 100)}%`
+    : '';
+  return `${field}: ${formatNumber(before)} -> ${formatNumber(after)} (${sign}${formatNumber(delta)}${percent})`;
+}
+
+function gemLocationKey(location: { groupIndex: number; gemIndex: number }): string {
+  return `${location.groupIndex}:${location.gemIndex}`;
+}
+
+function normalizeBuildName(name: string | undefined): string {
+  return (name ?? '').replace(/\.xml$/i, '').trim().toLowerCase();
+}
+
+function measurementDpsScore(measurement: GemQualityMeasurement): number | null {
+  for (const field of GEM_QUALITY_DPS_PRIORITY_FIELDS) {
+    const before = numericStat(measurement.before, field);
+    const after = numericStat(measurement.after, field);
+    if (before != null && after != null) {
+      return after - before;
+    }
+  }
+  return null;
+}
+
+function measurementDeltaLines(measurement: GemQualityMeasurement): string[] {
+  const changedLines: string[] = [];
+  for (const field of GEM_QUALITY_PREVIEW_FIELDS) {
+    const before = numericStat(measurement.before, field);
+    const after = numericStat(measurement.after, field);
+    if (before == null || after == null) continue;
+    if (before !== after) {
+      changedLines.push(formatMeasuredDelta(field, before, after));
+    }
+  }
+  return changedLines;
+}
+
+async function measureGemQuality(
+  context: SkillGemHandlerContext,
+  buildName: string,
+  recommendations: Array<{ location: { groupIndex: number; gemIndex: number } }>
+): Promise<{
+  measurements: Map<string, GemQualityMeasurement>;
+  note: string;
+}> {
+  const measurements = new Map<string, GemQualityMeasurement>();
+
+  const luaClient = context.getLuaClient?.() ?? null;
+  if (!luaClient || !luaClient.isAlive()) {
+    return {
+      measurements,
+      note: 'Live measurement unavailable: Lua bridge is not active. Use lua_load_build for this build, then rerun validate_gem_quality.',
+    };
+  }
+
+  try {
+    const info = await luaClient.getBuildInfo();
+    const loadedName = normalizeBuildName(info?.name ?? info?.buildName);
+    const requestedName = normalizeBuildName(buildName);
+    if (loadedName && requestedName && loadedName !== requestedName) {
+      return {
+        measurements,
+        note: `Live measurement skipped: Lua bridge has "${info?.name ?? info?.buildName}" loaded, not "${buildName}". Use lua_load_build("${buildName}") first.`,
+      };
+    }
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return {
+      measurements,
+      note: `Live measurement unavailable: could not read loaded build info (${msg}). Use lua_load_build for this build, then rerun validate_gem_quality.`,
+    };
+  }
+
+  for (const recommendation of recommendations) {
+    const key = gemLocationKey(recommendation.location);
+    try {
+      const preview = await luaClient.previewGemQuality({
+        groupIndex: recommendation.location.groupIndex,
+        gemIndex: recommendation.location.gemIndex,
+        quality: 20,
+        fields: GEM_QUALITY_PREVIEW_FIELDS,
+      });
+      const measurement: GemQualityMeasurement = {
+        restored: preview.restored === true,
+        before: preview.before ?? {},
+        after: preview.after ?? {},
+        restoredStats: preview.restoredStats,
+        targetQuality: 20,
+        dpsScore: null,
+      };
+      measurement.dpsScore = measurementDpsScore(measurement);
+      measurements.set(key, measurement);
+    } catch (error) {
+      measurements.set(key, {
+        restored: false,
+        before: {},
+        after: {},
+        targetQuality: 20,
+        dpsScore: null,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return {
+    measurements,
+    note: 'Live measurement: non-destructive gem-quality preview via PoB bridge; original gem quality restored after each candidate.',
+  };
 }
 
 /**
@@ -303,18 +457,49 @@ export async function handleValidateGemQuality(
   const validation = skillGemService.validateGemQuality(buildData, {
     includeCorrupted: args.include_corrupted,
   });
+  const measurementResult = await measureGemQuality(context, args.build_name, validation.needsQuality);
+  const measurementMap = measurementResult.measurements;
+  const needsQuality = [...validation.needsQuality].sort((a, b) => {
+    const aMeasurement = measurementMap.get(gemLocationKey(a.location));
+    const bMeasurement = measurementMap.get(gemLocationKey(b.location));
+    const aScore = aMeasurement?.dpsScore;
+    const bScore = bMeasurement?.dpsScore;
+    if (aScore != null || bScore != null) {
+      return (bScore ?? Number.NEGATIVE_INFINITY) - (aScore ?? Number.NEGATIVE_INFINITY);
+    }
+    return b.qualityGap - a.qualityGap;
+  });
 
   // Format output
-  const outputLines: string[] = ['=== Gem Quality Validation ===', ''];
+  const outputLines: string[] = ['=== Gem Quality Validation ===', '', measurementResult.note, ''];
 
-  if (validation.needsQuality.length > 0) {
-    outputLines.push(`⚠ ${validation.needsQuality.length} gem(s) need quality improvement:`);
-    for (let i = 0; i < validation.needsQuality.length; i++) {
-      const gem = validation.needsQuality[i];
+  if (needsQuality.length > 0) {
+    outputLines.push(`⚠ ${needsQuality.length} gem(s) need quality improvement:`);
+    for (let i = 0; i < needsQuality.length; i++) {
+      const gem = needsQuality[i];
+      const measurement = measurementMap.get(gemLocationKey(gem.location));
       outputLines.push(`${i + 1}. ${gem.gem}: ${gem.current} → ${gem.recommended}`);
       outputLines.push(`   Location: ${formatGemLocation(gem.location)}`);
-      outputLines.push(`   Measured: ${gem.measured ? "yes" : "no"} - ${gem.measurement}`);
-      outputLines.push(`   Priority basis: ${gem.qualityGap}% missing quality only; not a DPS ranking`);
+      if (measurement && !measurement.error) {
+        outputLines.push(`   Measured: yes - previewed Q${measurement.targetQuality}; restored=${measurement.restored ? 'yes' : 'no'}`);
+        const deltaLines = measurementDeltaLines(measurement);
+        if (deltaLines.length > 0) {
+          outputLines.push('   Modeled stat delta:');
+          for (const line of deltaLines) {
+            outputLines.push(`     - ${line}`);
+          }
+          outputLines.push('   Priority basis: measured PoB stat delta; still verify price/acquisition before spending.');
+        } else {
+          outputLines.push(`   Modeled stat delta: none across tracked fields (${GEM_QUALITY_PREVIEW_FIELDS.join(', ')}).`);
+          outputLines.push('   Priority basis: zero modeled delta; only consider QoL or untracked effects if the gem quality text matters.');
+        }
+      } else if (measurement?.error) {
+        outputLines.push(`   Measured: no - preview failed (${measurement.error}); ${gem.measurement}`);
+        outputLines.push(`   Priority basis: ${gem.qualityGap}% missing quality only; not a DPS ranking`);
+      } else {
+        outputLines.push(`   Measured: ${gem.measured ? "yes" : "no"} - ${gem.measurement}`);
+        outputLines.push(`   Priority basis: ${gem.qualityGap}% missing quality only; not a DPS ranking`);
+      }
     }
     outputLines.push('');
   } else {
@@ -352,9 +537,17 @@ export async function handleValidateGemQuality(
     outputLines.push('');
   }
 
-  if (validation.needsQuality.length > 0) {
-    const largestGap = validation.needsQuality[0];
-    outputLines.push(`💡 Priority: measure ${largestGap.gem} first (${largestGap.qualityGap}% quality gap; ${formatGemLocation(largestGap.location)}) before calling it a DPS upgrade`);
+  if (needsQuality.length > 0) {
+    const measured = needsQuality.find((gem) => measurementMap.get(gemLocationKey(gem.location))?.dpsScore != null);
+    if (measured) {
+      const measurement = measurementMap.get(gemLocationKey(measured.location));
+      const delta = measurement?.dpsScore ?? 0;
+      const sign = delta > 0 ? '+' : '';
+      outputLines.push(`💡 Priority: ${measured.gem} has the highest measured DPS-field delta (${sign}${formatNumber(delta)}; ${formatGemLocation(measured.location)}).`);
+    } else {
+      const largestGap = needsQuality[0];
+      outputLines.push(`💡 Priority: measure ${largestGap.gem} first (${largestGap.qualityGap}% quality gap; ${formatGemLocation(largestGap.location)}) before calling it a DPS upgrade`);
+    }
   } else if (validation.exceptionalUpgrades.length > 0) {
     outputLines.push('💡 Consider Exceptional gem upgrades for significant DPS improvements');
   } else {

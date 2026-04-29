@@ -390,6 +390,34 @@ async setTree(params: {
     if (!res.ok) throw new Error(res.error || "set_gem_quality failed");
   }
 
+  async previewGemQuality(params: {
+    groupIndex: number;
+    gemIndex: number;
+    quality: number;
+    qualityId?: string;
+    fields?: string[];
+  }): Promise<{
+    before: Record<string, any>;
+    after: Record<string, any>;
+    restoredStats?: Record<string, any>;
+    restored: boolean;
+    gemBefore?: { name?: string; quality?: number; qualityId?: string };
+    gemPreview?: { name?: string; quality?: number; qualityId?: string };
+    gemRestored?: { name?: string; quality?: number; qualityId?: string };
+  }> {
+    const res = await this.send({ action: "preview_gem_quality", params });
+    if (!res.ok) throw new Error(res.error || "preview_gem_quality failed");
+    return res.result as {
+      before: Record<string, any>;
+      after: Record<string, any>;
+      restoredStats?: Record<string, any>;
+      restored: boolean;
+      gemBefore?: { name?: string; quality?: number; qualityId?: string };
+      gemPreview?: { name?: string; quality?: number; qualityId?: string };
+      gemRestored?: { name?: string; quality?: number; qualityId?: string };
+    };
+  }
+
   async removeSkill(params: { groupIndex: number }): Promise<void> {
     const res = await this.send({ action: "remove_skill", params });
     if (!res.ok) throw new Error(res.error || "remove_skill failed");
