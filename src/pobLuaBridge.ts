@@ -16,6 +16,140 @@ export interface PoBLuaApiOptions {
   timeoutMs?: number; // per-request timeout
 }
 
+export interface AnointStatDelta {
+  stat?: string;
+  label: string;
+  delta: number;
+  current?: number;
+  candidate?: number;
+  baseline?: number;
+  percentDelta?: number;
+  actor?: string;
+  lowerIsBetter?: boolean;
+}
+
+export interface AnointSummary {
+  nodeId?: number;
+  name: string;
+  statLines?: string[];
+  recipe?: string[];
+  dpsDelta?: number;
+  ehpDelta?: number;
+  dpsMetric?: string;
+}
+
+export interface AnointCandidateResult extends AnointSummary {
+  nodeId: number;
+  dpsDelta: number;
+  ehpDelta: number;
+  score: number;
+  swapDpsDelta?: number;
+  swapEhpDelta?: number;
+  statDeltas?: AnointStatDelta[];
+}
+
+export interface AnointMetricSnapshot {
+  DPS?: number;
+  CombinedDPS: number;
+  TotalDPS?: number;
+  FullDPS?: number;
+  MinionCombinedDPS?: number;
+  MinionTotalDPS?: number;
+  TotalEHP: number;
+}
+
+export interface AnointEvaluationResult {
+  candidates: AnointCandidateResult[];
+  base: AnointMetricSnapshot;
+  current?: AnointMetricSnapshot;
+  currentAnoint?: AnointSummary | null;
+  evaluated: number;
+  skipped: number;
+  slot: string;
+  baseType: string;
+  focus: string;
+  dpsMetric?: string;
+}
+
+function toNumber(value: unknown, fallback = 0): number {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : fallback;
+}
+
+function toOptionalNumber(value: unknown): number | undefined {
+  if (value === null || value === undefined) return undefined;
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? numberValue : undefined;
+}
+
+function toStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function mapStatDeltas(value: unknown): AnointStatDelta[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value
+    .filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object")
+    .map((entry) => ({
+      stat: typeof entry.stat === "string" ? entry.stat : undefined,
+      label: typeof entry.label === "string" ? entry.label : String(entry.stat ?? "Unknown stat"),
+      delta: toNumber(entry.delta),
+      current: toOptionalNumber(entry.current),
+      candidate: toOptionalNumber(entry.candidate),
+      baseline: toOptionalNumber(entry.baseline),
+      percentDelta: toOptionalNumber(entry.percentDelta),
+      actor: typeof entry.actor === "string" ? entry.actor : undefined,
+      lowerIsBetter: typeof entry.lowerIsBetter === "boolean" ? entry.lowerIsBetter : undefined,
+    }));
+}
+
+function mapAnointSummary(value: unknown): AnointSummary | null | undefined {
+  if (value === null) return null;
+  if (!value || typeof value !== "object") return undefined;
+  const entry = value as Record<string, unknown>;
+  const name = typeof entry.name === "string" ? entry.name : undefined;
+  if (!name) return undefined;
+  return {
+    nodeId: toOptionalNumber(entry.nodeId),
+    name,
+    statLines: toStringArray(entry.statLines),
+    recipe: toStringArray(entry.recipe),
+    dpsDelta: toOptionalNumber(entry.dpsDelta),
+    ehpDelta: toOptionalNumber(entry.ehpDelta),
+    dpsMetric: typeof entry.dpsMetric === "string" ? entry.dpsMetric : undefined,
+  };
+}
+
+function mapAnointCandidate(value: unknown): AnointCandidateResult {
+  const entry = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  return {
+    nodeId: toNumber(entry.nodeId),
+    name: String(entry.name ?? ""),
+    statLines: toStringArray(entry.statLines),
+    dpsDelta: toNumber(entry.dpsDelta),
+    ehpDelta: toNumber(entry.ehpDelta),
+    score: toNumber(entry.score),
+    recipe: toStringArray(entry.recipe),
+    swapDpsDelta: toOptionalNumber(entry.swapDpsDelta),
+    swapEhpDelta: toOptionalNumber(entry.swapEhpDelta),
+    statDeltas: mapStatDeltas(entry.statDeltas),
+    dpsMetric: typeof entry.dpsMetric === "string" ? entry.dpsMetric : undefined,
+  };
+}
+
+function mapAnointMetricSnapshot(value: Record<string, unknown>): AnointMetricSnapshot {
+  return {
+    DPS: toOptionalNumber(value.DPS),
+    CombinedDPS: toNumber(value.CombinedDPS),
+    TotalDPS: toOptionalNumber(value.TotalDPS),
+    FullDPS: toOptionalNumber(value.FullDPS),
+    MinionCombinedDPS: toOptionalNumber(value.MinionCombinedDPS),
+    MinionTotalDPS: toOptionalNumber(value.MinionTotalDPS),
+    TotalEHP: toNumber(value.TotalEHP),
+  };
+}
+
 export class PoBLuaApiClient {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private options: PoBLuaApiOptions;
@@ -445,25 +579,28 @@ async setTree(params: {
     return res.output;
   }
 
-  async evaluateAnointCandidates(params: { slot: string; focus?: 'dps' | 'defence' | 'both'; limit?: number }): Promise<{
-    candidates: Array<{ nodeId: number; name: string; dpsDelta: number; ehpDelta: number; score: number; recipe?: string[] }>;
-    base: { CombinedDPS: number; TotalEHP: number };
-    evaluated: number;
-    skipped: number;
-    slot: string;
-    baseType: string;
-    focus: string;
-  }> {
+  async evaluateAnointCandidates(params: { slot: string; focus?: 'dps' | 'defence' | 'both'; limit?: number }): Promise<AnointEvaluationResult> {
     const res = await this.send({ action: "evaluate_anoint_candidates", params });
     if (!res.ok) throw new Error(res.error || "evaluate_anoint_candidates failed");
+    const base = (res.base && typeof res.base === "object" ? res.base : {}) as Record<string, unknown>;
+    const current = (res.current && typeof res.current === "object" ? res.current : undefined) as Record<string, unknown> | undefined;
     return {
-      candidates: (res.candidates as Array<{ nodeId: number; name: string; dpsDelta: number; ehpDelta: number; score: number; recipe?: string[] }>) || [],
-      base: (res.base as { CombinedDPS: number; TotalEHP: number }) || { CombinedDPS: 0, TotalEHP: 0 },
+      candidates: Array.isArray(res.candidates) ? res.candidates.map(mapAnointCandidate) : [],
+      base: mapAnointMetricSnapshot(base),
+      current: current
+        ? mapAnointMetricSnapshot(current)
+        : undefined,
+      currentAnoint: Object.prototype.hasOwnProperty.call(res, "currentAnoint")
+        ? mapAnointSummary(res.currentAnoint)
+        : res.currentAnointDetected === false
+          ? null
+          : undefined,
       evaluated: Number(res.evaluated) || 0,
       skipped: Number(res.skipped) || 0,
       slot: String(res.slot ?? ''),
       baseType: String(res.baseType ?? ''),
       focus: String(res.focus ?? 'both'),
+      dpsMetric: typeof res.dpsMetric === "string" ? res.dpsMetric : undefined,
     };
   }
 

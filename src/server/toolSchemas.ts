@@ -1737,7 +1737,7 @@ export function getBuildGoalsToolSchemas(): any[] {
     },
     {
       name: "find_best_anointment",
-      description: "Rank the best anointable notables for the loaded build by simulating the impact of each anoint via PoB's MiscCalculator (non-destructive, same engine the GUI uses to sort anoints in the item picker). Iterates ALL anointable notables across the tree (~400) — not a keyword-filtered subset. Requires an anointable item equipped in the target slot: any Amulet, or a Cord Belt for the Belt slot.",
+      description: "Rank the best anointable notables for the loaded build by simulating the impact of each anoint via PoB's MiscCalculator (non-destructive, same engine the GUI uses to sort anoints in the item picker). Iterates ALL anointable notables across the tree (~400) - not a keyword-filtered subset. Requires an anointable item equipped in the target slot: any Amulet, or a Cord Belt for the Belt slot. Output uses PoB's FullDPS metric when available, then falls back to CombinedDPS/TotalDPS, and includes current anoint effect, candidate effect text, no-anoint contribution, net swap deltas versus the current anoint, and secondary display-stat tradeoffs when the PoB bridge returns them.",
       inputSchema: {
         type: "object",
         properties: {
