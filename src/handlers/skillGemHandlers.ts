@@ -93,6 +93,19 @@ function resolveSkillSelection(build: any, args?: SkillSelectorArgs): ResolvedSk
   };
 }
 
+function formatGemLocation(location?: {
+  skillIndex: number;
+  groupIndex: number;
+  gemIndex: number;
+  slot: string;
+  activeSkillName: string;
+}): string {
+  if (!location) {
+    return "unknown location";
+  }
+  return `slot=${location.slot}, group_index=${location.groupIndex}, skill_index=${location.skillIndex}, gem_index=${location.gemIndex}, active_skill=${location.activeSkillName}`;
+}
+
 /**
  * Handle analyze_skill_links tool call
  */
@@ -400,11 +413,25 @@ export async function handleValidateGemQuality(
     outputLines.push(`⚠ ${validation.needsQuality.length} gem(s) need quality improvement:`);
     for (let i = 0; i < validation.needsQuality.length; i++) {
       const gem = validation.needsQuality[i];
-      outputLines.push(`${i + 1}. ${gem.gem}: ${gem.current} → ${gem.recommended} (Impact: ${gem.impact})`);
+      outputLines.push(`${i + 1}. ${gem.gem}: ${gem.current} → ${gem.recommended}`);
+      outputLines.push(`   Location: ${formatGemLocation(gem.location)}`);
+      outputLines.push(`   Measured: ${gem.measured ? "yes" : "no"} - ${gem.measurement}`);
+      outputLines.push(`   Priority basis: ${gem.qualityGap}% missing quality only; not a DPS ranking`);
     }
     outputLines.push('');
   } else {
     outputLines.push('✓ All gems have quality 20', '');
+  }
+
+  if (validation.qualityCapped.length > 0) {
+    outputLines.push('Quality-capped gem copies:');
+    for (let i = 0; i < validation.qualityCapped.length; i++) {
+      const capped = validation.qualityCapped[i];
+      outputLines.push(`${i + 1}. ${capped.gem}: ${capped.current}`);
+      outputLines.push(`   Location: ${formatGemLocation(capped.location)}`);
+      outputLines.push(`   Cap: ${capped.cap}`);
+    }
+    outputLines.push('');
   }
 
   if (validation.exceptionalUpgrades.length > 0) {
@@ -412,6 +439,7 @@ export async function handleValidateGemQuality(
     for (let i = 0; i < validation.exceptionalUpgrades.length; i++) {
       const upgrade = validation.exceptionalUpgrades[i];
       outputLines.push(`${i + 1}. ${upgrade.gem} → ${upgrade.exceptional}`);
+      outputLines.push(`   Location: ${formatGemLocation(upgrade.location)}`);
       outputLines.push(`   Est. DPS Gain: ${upgrade.dpsGain}`);
       outputLines.push(`   Acquirable: ${upgrade.acquirable}`);
       outputLines.push(`   Price-checked: ${upgrade.priceChecked ? "yes" : "no"}`);
@@ -424,6 +452,7 @@ export async function handleValidateGemQuality(
     for (let i = 0; i < validation.corruptionTargets.length; i++) {
       const target = validation.corruptionTargets[i];
       outputLines.push(`${i + 1}. ${target.gem} (current) → ${target.target} (corrupted)`);
+      outputLines.push(`   Location: ${formatGemLocation(target.location)}`);
       outputLines.push(`   Cap: ${target.cap}`);
       outputLines.push(`   Risk: ${target.risk}`);
     }
@@ -431,10 +460,8 @@ export async function handleValidateGemQuality(
   }
 
   if (validation.needsQuality.length > 0) {
-    const highPriority = validation.needsQuality.find((g) => g.impact === "High");
-    if (highPriority) {
-      outputLines.push(`💡 Priority: Quality your ${highPriority.gem} first (highest impact)`);
-    }
+    const largestGap = validation.needsQuality[0];
+    outputLines.push(`💡 Priority: measure ${largestGap.gem} first (${largestGap.qualityGap}% quality gap; ${formatGemLocation(largestGap.location)}) before calling it a DPS upgrade`);
   } else if (validation.exceptionalUpgrades.length > 0) {
     outputLines.push('💡 Consider Exceptional gem upgrades for significant DPS improvements');
   } else {

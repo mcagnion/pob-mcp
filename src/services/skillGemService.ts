@@ -68,11 +68,38 @@ export interface GemSuggestion {
   conflicts?: string[];
 }
 
+export interface GemLocation {
+  skillIndex: number; // Zero-based build skill index used by skill analysis tools
+  groupIndex: number; // One-based socket group index used by gem mutation tools
+  gemIndex: number; // One-based gem index within the socket group
+  slot: string;
+  activeSkillName: string;
+}
+
+export interface GemQualityRecommendation {
+  gem: string;
+  current: string;
+  recommended: string;
+  impact: "Unmeasured";
+  measured: false;
+  measurement: string;
+  qualityGap: number;
+  location: GemLocation;
+}
+
+export interface GemQualityCapStatus {
+  gem: string;
+  current: string;
+  cap: string;
+  location: GemLocation;
+}
+
 const HEURISTIC_GEM_MEASUREMENT = "heuristic estimate only (not live PoB DPS)";
 const UNVERIFIED_GEM_ACQUISITION = "unverified in requested league";
 const UNCHECKED_GEM_PRICE = false;
 const GEM_CORRUPTION_LEVEL_CAP_INCREASE = 1;
 const GEM_CORRUPTION_QUALITY_CAP_INCREASE = 3;
+const MODELED_CORRUPTED_QUALITY_CAP = 20 + GEM_CORRUPTION_QUALITY_CAP_INCREASE;
 
 export class SkillGemService {
   private gemDatabase: Map<string, GemData>;
@@ -223,69 +250,91 @@ export class SkillGemService {
     build: PoBBuild,
     options: { includeCorrupted?: boolean } = {}
   ): {
-    needsQuality: Array<{ gem: string; current: string; recommended: string; impact: string }>;
-    exceptionalUpgrades: Array<{ gem: string; exceptional: string; dpsGain: string; acquirable: string; priceChecked: boolean }>;
-    corruptionTargets?: Array<{ gem: string; target: string; risk: string; cap: string }>;
+    needsQuality: GemQualityRecommendation[];
+    exceptionalUpgrades: Array<{ gem: string; exceptional: string; dpsGain: string; acquirable: string; priceChecked: boolean; location: GemLocation }>;
+    corruptionTargets?: Array<{ gem: string; target: string; risk: string; cap: string; location: GemLocation }>;
+    qualityCapped: GemQualityCapStatus[];
   } {
     const skills = this.extractSkills(build);
-    const allGems = skills.flatMap((s) => s.gems);
 
-    const needsQuality: Array<{ gem: string; current: string; recommended: string; impact: string }> = [];
-    const exceptionalUpgrades: Array<{ gem: string; exceptional: string; dpsGain: string; acquirable: string; priceChecked: boolean }> = [];
-    const corruptionTargets: Array<{ gem: string; target: string; risk: string; cap: string }> = [];
+    const needsQuality: GemQualityRecommendation[] = [];
+    const exceptionalUpgrades: Array<{ gem: string; exceptional: string; dpsGain: string; acquirable: string; priceChecked: boolean; location: GemLocation }> = [];
+    const corruptionTargets: Array<{ gem: string; target: string; risk: string; cap: string; location: GemLocation }> = [];
+    const qualityCapped: GemQualityCapStatus[] = [];
 
-    for (const gem of allGems) {
-      const name = this.gemName(gem);
-      const level = gem.level || 1;
-      const quality = gem.quality || 0;
+    for (const skill of skills) {
+      for (let gemPosition = 0; gemPosition < skill.gems.length; gemPosition++) {
+        const gem = skill.gems[gemPosition];
+        const name = this.gemName(gem);
+        const level = gem.level || 1;
+        const quality = gem.quality || 0;
+        const location = this.gemLocation(skill, gemPosition);
 
-      // Check quality
-      if (quality < 20) {
-        const impact = quality === 0 ? "High" : "Medium";
-        needsQuality.push({
-          gem: name,
-          current: `${level}/${quality}`,
-          recommended: `${level}/20`,
-          impact,
-        });
-      }
+        // Check quality
+        if (quality < 20) {
+          needsQuality.push({
+            gem: name,
+            current: `${level}/${quality}`,
+            recommended: `${level}/20`,
+            impact: "Unmeasured",
+            measured: false,
+            measurement: "not measured against this build; verify with set_gem_quality and stat readback before ranking DPS",
+            qualityGap: 20 - quality,
+            location,
+          });
+        }
 
-      // Check Exceptional upgrades
-      const gemData = this.gemDatabase.get(name);
-      if (gemData?.exceptional) {
-        const exceptionalName = `Exceptional ${name}`;
-        exceptionalUpgrades.push({
-          gem: name,
-          exceptional: exceptionalName,
-          dpsGain: "~8-12%",
-          acquirable: UNVERIFIED_GEM_ACQUISITION,
-          priceChecked: UNCHECKED_GEM_PRICE,
-        });
-      }
+        if (quality >= MODELED_CORRUPTED_QUALITY_CAP) {
+          qualityCapped.push({
+            gem: name,
+            current: `${level}/${quality}`,
+            cap: `already at or above the modeled corrupted quality cap (${MODELED_CORRUPTED_QUALITY_CAP}%); do not target this copy for normal quality upgrades`,
+            location,
+          });
+        }
 
-      // Check corruption targets
-      if (options.includeCorrupted && level === 20 && quality === 20) {
-        corruptionTargets.push({
-          gem: name,
-          target: `${level + GEM_CORRUPTION_LEVEL_CAP_INCREASE}/${quality + GEM_CORRUPTION_QUALITY_CAP_INCREASE}`,
-          cap: `Corruption can add at most +${GEM_CORRUPTION_LEVEL_CAP_INCREASE} gem level and +${GEM_CORRUPTION_QUALITY_CAP_INCREASE}% quality.`,
-          risk: "Outcome is not guaranteed; verify current league price before buying a corrupted gem.",
-        });
+        // Check Exceptional upgrades
+        const gemData = this.gemDatabase.get(name);
+        if (gemData?.exceptional) {
+          const exceptionalName = `Exceptional ${name}`;
+          exceptionalUpgrades.push({
+            gem: name,
+            exceptional: exceptionalName,
+            dpsGain: "~8-12%",
+            acquirable: UNVERIFIED_GEM_ACQUISITION,
+            priceChecked: UNCHECKED_GEM_PRICE,
+            location,
+          });
+        }
+
+        // Check corruption targets
+        if (options.includeCorrupted && level === 20 && quality === 20) {
+          corruptionTargets.push({
+            gem: name,
+            target: `${level + GEM_CORRUPTION_LEVEL_CAP_INCREASE}/${quality + GEM_CORRUPTION_QUALITY_CAP_INCREASE}`,
+            cap: `Corruption can add at most +${GEM_CORRUPTION_LEVEL_CAP_INCREASE} gem level and +${GEM_CORRUPTION_QUALITY_CAP_INCREASE}% quality.`,
+            risk: "Outcome is not guaranteed; verify current league price before buying a corrupted gem.",
+            location,
+          });
+        }
       }
     }
+
+    needsQuality.sort((a, b) => b.qualityGap - a.qualityGap);
 
     return {
       needsQuality,
       exceptionalUpgrades,
       corruptionTargets: options.includeCorrupted ? corruptionTargets : undefined,
+      qualityCapped,
     };
   }
 
   /**
    * Extract skills from build
    */
-  private extractSkills(build: PoBBuild): Array<{ gems: any[]; slot: string }> {
-    const skills: Array<{ gems: any[]; slot: string }> = [];
+  private extractSkills(build: PoBBuild): Array<{ index: number; gems: any[]; slot: string; activeSkillName: string }> {
+    const skills: Array<{ index: number; gems: any[]; slot: string; activeSkillName: string }> = [];
 
     if (build.Skills?.SkillSet) {
       const skillSets = Array.isArray(build.Skills.SkillSet)
@@ -300,8 +349,10 @@ export class SkillGemService {
             if (skill.Gem) {
               const gems = Array.isArray(skill.Gem) ? skill.Gem : [skill.Gem];
               skills.push({
+                index: skills.length,
                 gems,
                 slot: skill.slot || "Unknown",
+                activeSkillName: this.gemName(gems[0]),
               });
             }
           }
@@ -310,6 +361,19 @@ export class SkillGemService {
     }
 
     return skills;
+  }
+
+  private gemLocation(
+    skill: { index: number; slot: string; activeSkillName: string },
+    gemPosition: number
+  ): GemLocation {
+    return {
+      skillIndex: skill.index,
+      groupIndex: skill.index + 1,
+      gemIndex: gemPosition + 1,
+      slot: skill.slot,
+      activeSkillName: skill.activeSkillName,
+    };
   }
 
   /**
