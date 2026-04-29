@@ -70,13 +70,13 @@ export function getToolSchemas(): ToolSchema[] {
     },
     {
       name: "lua_list_characters",
-      description: "List all characters on a PoE account via the official API. Does not require the Lua bridge to be enabled. Use this to find a character to import. Account name needs the discriminator (e.g., account#1234).",
+      description: "List all characters on a PoE account via the official API. Does not require the Lua bridge to be enabled. Use this to find a character to import. Account name needs the discriminator (e.g., account#1234). If omitted, falls back to POE_ACCOUNT_NAME.",
       inputSchema: {
         type: "object",
         properties: {
           account_name: {
             type: "string",
-            description: "PoE account name including discriminator (e.g., 'account#1234').",
+            description: "PoE account name including discriminator (e.g., 'account#1234'). Optional when POE_ACCOUNT_NAME is set.",
           },
           realm: {
             type: "string",
@@ -85,7 +85,6 @@ export function getToolSchemas(): ToolSchema[] {
             default: "pc",
           },
         },
-        required: ["account_name"],
       },
     },
     {
@@ -302,13 +301,13 @@ export function getLuaToolSchemas(): any[] {
     },
     {
       name: "lua_import_character",
-      description: "Import a character from the official PoE API into the currently loaded build (replaces tree, items, and gems). Requires a build loaded via lua_load_build or lua_new_build. Set POE_SESSION_ID env var for private profiles.",
+      description: "Import a character from the official PoE API into the currently loaded build (replaces tree, items, and gems). Requires a build loaded via lua_load_build or lua_new_build. If account_name is omitted, falls back to POE_ACCOUNT_NAME. Set POE_SESSION_ID env var for private profiles.",
       inputSchema: {
         type: "object",
         properties: {
           account_name: {
             type: "string",
-            description: "PoE account name including discriminator (e.g., 'account#1234').",
+            description: "PoE account name including discriminator (e.g., 'account#1234'). Optional when POE_ACCOUNT_NAME is set.",
           },
           character_name: {
             type: "string",
@@ -341,7 +340,7 @@ export function getLuaToolSchemas(): any[] {
             default: false,
           },
         },
-        required: ["account_name", "character_name"],
+        required: ["character_name"],
       },
     },
     {
