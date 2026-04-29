@@ -12,6 +12,7 @@ import path from "path";
 import os from "os";
 import fs from "fs/promises";
 import { XMLParser } from "fast-xml-parser";
+import { readGitCommit } from "./handlers/statusHandlers.js";
 // Import services
 import { BuildService } from "./services/buildService.js";
 import { TreeService } from "./services/treeService.js";
@@ -41,10 +42,16 @@ import { getToolSchemas, getLuaToolSchemas, getOptimizationToolSchemas, getConfi
 import { routeToolCall, type ToolRouterDependencies } from "./server/toolRouter.js";
 import { wrapWithTruncation } from "./server/responseUtils.js";
 
+const SERVER_NAME = "pob-mcp-server";
+const SERVER_VERSION = "1.0.0";
+
 class PoBMCPServer {
   private server: Server;
   private pobDirectory: string;
   private parser: XMLParser;
+  private startedAt: Date;
+  private startupGitCommit: string | null;
+  private luaEnabled: boolean;
 
   // Services
   private buildService: BuildService;
@@ -68,8 +75,8 @@ class PoBMCPServer {
   constructor() {
     this.server = new Server(
       {
-        name: "pob-mcp-server",
-        version: "1.0.0",
+        name: SERVER_NAME,
+        version: SERVER_VERSION,
       },
       {
         capabilities: {
@@ -78,6 +85,8 @@ class PoBMCPServer {
         },
       }
     );
+    this.startedAt = new Date();
+    this.startupGitCommit = readGitCommit();
 
     // Initialize XML parser
     this.parser = new XMLParser({
@@ -124,8 +133,8 @@ class PoBMCPServer {
     // Initialize server modules
     this.toolGate = new ToolGate();
 
-    const luaEnabled = process.env.POB_LUA_ENABLED === 'true';
-    this.luaClientManager = new LuaClientManager(luaEnabled);
+    this.luaEnabled = process.env.POB_LUA_ENABLED === 'true';
+    this.luaClientManager = new LuaClientManager(this.luaEnabled);
 
     // Initialize context builder
     this.contextBuilder = new ContextBuilder({
@@ -136,13 +145,13 @@ class PoBMCPServer {
       exportService: this.exportService,
       skillGemService: this.skillGemService,
       pobDirectory: this.pobDirectory,
-      luaEnabled: luaEnabled,
+      luaEnabled: this.luaEnabled,
       getLuaClient: () => this.luaClientManager.getClient(),
       ensureLuaClient: () => this.luaClientManager.ensureClient(),
       stopLuaClient: () => this.luaClientManager.stopClient(),
     });
 
-    if (luaEnabled) {
+    if (this.luaEnabled) {
       console.error('[MCP Server] PoB Lua Bridge enabled (stdio mode)');
     }
 
@@ -315,6 +324,12 @@ class PoBMCPServer {
           ninjaClient: this.ninjaClient,
           getLuaClient: () => this.luaClientManager.getClient(),
           ensureLuaClient: () => this.luaClientManager.ensureClient(),
+          serverName: SERVER_NAME,
+          serverVersion: SERVER_VERSION,
+          serverStartedAt: this.startedAt,
+          startupGitCommit: this.startupGitCommit,
+          pobDirectory: this.pobDirectory,
+          luaEnabled: this.luaEnabled,
         };
 
         // Route the tool call
