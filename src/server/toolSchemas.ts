@@ -1141,7 +1141,7 @@ export function getSkillGemToolSchemas(): any[] {
     },
     {
       name: "validate_gem_quality",
-      description: "Check all gems for quality and level improvements. Identifies missing quality, Exceptional upgrade opportunities, and corruption targets.",
+      description: "Check all gems for quality and level improvements. Identifies missing quality with slot/group/gem context, labels quality impact as unmeasured until stat readback, and reports Exceptional upgrade opportunities and corruption targets.",
       inputSchema: {
         type: "object",
         properties: {
