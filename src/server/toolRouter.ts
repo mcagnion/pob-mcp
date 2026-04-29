@@ -37,6 +37,7 @@ import { handleSuggestWatchersEye } from "../handlers/jewelAdvisorHandlers.js";
 import { handleSuggestCrafting } from "../handlers/craftingAdvisorHandler.js";
 import { handleFindItemUpgrades as handleFindItemUpgradesNew } from "../handlers/itemShoppingHandler.js";
 import { handleAnalyzeChargeEconomy } from "../handlers/chargeEconomyHandlers.js";
+import { handleMcpStatus } from "../handlers/statusHandlers.js";
 
 export interface ToolRouterDependencies {
   toolGate: ToolGate;
@@ -47,6 +48,12 @@ export interface ToolRouterDependencies {
   ninjaClient: PoeNinjaClient;
   getLuaClient: () => import("../pobLuaBridge.js").PoBLuaApiClient | null;
   ensureLuaClient: () => Promise<void>;
+  serverName: string;
+  serverVersion: string;
+  serverStartedAt: Date;
+  startupGitCommit: string | null;
+  pobDirectory: string;
+  luaEnabled: boolean;
 }
 
 export type ToolResponse = Promise<{
@@ -78,6 +85,17 @@ export async function routeToolCall(
   const skillGemContext = deps.contextBuilder.buildSkillGemContext();
 
   switch (name) {
+    case "mcp_status":
+      return await handleMcpStatus({
+        serverName: deps.serverName,
+        serverVersion: deps.serverVersion,
+        startedAt: deps.serverStartedAt,
+        startupGitCommit: deps.startupGitCommit,
+        pobDirectory: deps.pobDirectory,
+        luaEnabled: deps.luaEnabled,
+        getLuaClient: deps.getLuaClient,
+      });
+
     case "list_builds":
       return await handleListBuilds(handlerContext);
 

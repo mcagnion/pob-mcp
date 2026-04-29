@@ -21,6 +21,14 @@ export interface ToolSchema {
 export function getToolSchemas(): ToolSchema[] {
   return [
     {
+      name: "mcp_status",
+      description: "Show the active MCP server runtime status: server version, startup/current git commit, uptime, Lua bridge state, loaded build, and warnings for stale server code or the Lua bootstrap build.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
       name: "analyze_build",
       description: "Analyze a Path of Building build file and extract detailed information including stats, skills, gear, passive skill tree analysis with keystones, notables, jewel sockets, build archetype detection, and optimization suggestions",
       inputSchema: {

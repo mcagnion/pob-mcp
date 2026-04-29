@@ -18,6 +18,7 @@ const unitGuardrailTests = [
   'tests/unit/optimizationHandlers.test.ts',
   'tests/unit/passiveUpgradesGuardrail.test.ts',
   'tests/unit/searchTreeAllocationGuardrail.test.ts',
+  'tests/unit/statusHandlers.test.ts',
   'tests/unit/treeHandlers.test.ts',
   'tests/unit/toolSchemas.test.ts',
   'tests/unit/tradeHandlers.test.ts',
