@@ -9,6 +9,7 @@ const unitGuardrailTests = [
   'tests/unit/configHandlers.test.ts',
   'tests/unit/gemFeasibilityGuardrails.test.ts',
   'tests/unit/gemQualityFreshness.test.ts',
+  'tests/unit/gemQualityValidation.test.ts',
   'tests/unit/itemShoppingHandler.test.ts',
   'tests/unit/itemSkillHandlers.test.ts',
   'tests/unit/jewelAdvisorHandlers.test.ts',
@@ -34,9 +35,19 @@ const syntheticSmokes = [
 const npmCmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const npxCmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
 
+function quoteWindowsArg(arg) {
+  const text = String(arg);
+  if (!/[\s"]/u.test(text)) return text;
+  return `"${text.replace(/"/gu, '\\"')}"`;
+}
+
 function run(command, args, options = {}) {
   console.log(`\n[verify] ${command} ${args.join(' ')}`);
-  const result = spawnSync(command, args, {
+  const spawnCommand = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : command;
+  const spawnArgs = process.platform === 'win32'
+    ? ['/d', '/s', '/c', [command, ...args].map(quoteWindowsArg).join(' ')]
+    : args;
+  const result = spawnSync(spawnCommand, spawnArgs, {
     stdio: 'inherit',
     env: {
       ...process.env,
@@ -46,6 +57,10 @@ function run(command, args, options = {}) {
       ...options.env,
     },
   });
+
+  if (result.error) {
+    console.error(`[verify] Failed to run ${command}: ${result.error.message}`);
+  }
 
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
