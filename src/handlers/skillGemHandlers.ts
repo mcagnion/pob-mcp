@@ -14,12 +14,91 @@ export interface SkillGemHandlerContext {
 const GEM_MECHANICS_FRESHNESS_NOTE =
   'Gem quality, corruption outcomes, and Exceptional/alternate gem availability are version-sensitive. Verify with current PoB gem data and post-change stat readback before buying or corrupting.';
 
+interface SkillSelectorArgs {
+  skill_index?: number;
+  skill_name?: string;
+}
+
+interface ExtractedSkillGroup {
+  index: number;
+  gems: any[];
+  slot: string;
+  activeSkillName: string;
+  isMain: boolean;
+  isEnabled: boolean;
+  isInActiveSet: boolean;
+}
+
+interface ResolvedSkillSelection {
+  index: number;
+  skillName: string;
+  reason: string;
+}
+
+function gemName(gem: any): string {
+  return gem?.nameSpec || gem?.name || gem?.gemId || "Unknown Skill";
+}
+
+function isTruthy(value: unknown): boolean {
+  return value === true || value === 1 || value === "true" || value === "1";
+}
+
+function isFalsey(value: unknown): boolean {
+  return value === false || value === 0 || value === "false" || value === "0";
+}
+
+function resolveSkillSelection(build: any, args?: SkillSelectorArgs): ResolvedSkillSelection {
+  const skills = extractSkills(build);
+  if (skills.length === 0) {
+    throw new Error("No skill groups found in build.");
+  }
+
+  if (args?.skill_name?.trim()) {
+    const requested = args.skill_name.trim().toLowerCase();
+    const match = skills.find((skill) => skill.activeSkillName.toLowerCase() === requested);
+    if (!match) {
+      const available = skills.map((skill) => `${skill.index}: ${skill.activeSkillName}`).join(", ");
+      throw new Error(`Skill "${args.skill_name}" not found. Available skills: ${available}`);
+    }
+    return {
+      index: match.index,
+      skillName: match.activeSkillName,
+      reason: `matched skill_name="${args.skill_name.trim()}"`,
+    };
+  }
+
+  if (args?.skill_index !== undefined) {
+    if (!Number.isInteger(args.skill_index) || args.skill_index < 0 || args.skill_index >= skills.length) {
+      throw new Error(`skill_index ${args.skill_index} not found. Build has ${skills.length} skill group(s).`);
+    }
+    const selected = skills[args.skill_index];
+    return {
+      index: selected.index,
+      skillName: selected.activeSkillName,
+      reason: "explicit zero-based skill_index",
+    };
+  }
+
+  const selected =
+    skills.find((skill) => skill.isMain) ||
+    skills.find((skill) => skill.isInActiveSet && skill.isEnabled) ||
+    skills[0];
+
+  return {
+    index: selected.index,
+    skillName: selected.activeSkillName,
+    reason: selected.isMain
+      ? "defaulted to XML mainActiveSkill group"
+      : "defaulted to first enabled skill group",
+  };
+}
+
 /**
  * Handle analyze_skill_links tool call
  */
 export async function handleAnalyzeSkillLinks(
   context: SkillGemHandlerContext,
-  args?: { build_name?: string; skill_index?: number }
+  args?: { build_name?: string; skill_index?: number; skill_name?: string }
 ) {
   return wrapHandler('analyze skill links', async () => {
   const { buildService, skillGemService } = context;
@@ -29,7 +108,8 @@ export async function handleAnalyzeSkillLinks(
   }
 
   const buildData = await buildService.readBuild(args.build_name);
-  const skillIndex = args.skill_index || 0;
+  const selection = resolveSkillSelection(buildData, args);
+  const skillIndex = selection.index;
 
   const analysis = skillGemService.analyzeSkillLinks(buildData, skillIndex);
 
@@ -37,6 +117,7 @@ export async function handleAnalyzeSkillLinks(
   const outputLines: string[] = [
     `=== Skill Analysis: ${analysis.activeSkill.name} ===`,
     '',
+    `Selected Skill: ${selection.skillName} (index ${skillIndex}; ${selection.reason})`,
     `Active Skill: ${analysis.activeSkill.name} (Level ${analysis.activeSkill.level}/${analysis.activeSkill.quality})`,
     `Tags: ${analysis.activeSkill.tags.join(", ")}`,
     `Archetype: ${analysis.archetype}`,
@@ -103,6 +184,7 @@ export async function handleSuggestSupportGems(
   args?: {
     build_name?: string;
     skill_index?: number;
+    skill_name?: string;
     count?: number;
     include_exceptional?: boolean;
     budget?: "league_start" | "mid_league" | "endgame";
@@ -116,7 +198,8 @@ export async function handleSuggestSupportGems(
   }
 
   const buildData = await buildService.readBuild(args.build_name);
-  const skillIndex = args.skill_index || 0;
+  const selection = resolveSkillSelection(buildData, args);
+  const skillIndex = selection.index;
 
   const suggestions = skillGemService.suggestSupportGems(buildData, skillIndex, {
     count: args.count,
@@ -130,6 +213,8 @@ export async function handleSuggestSupportGems(
   // Format output
   const outputLines: string[] = [
     `=== Support Gem Recommendations for ${analysis.activeSkill.name} ===`,
+    '',
+    `Selected Skill: ${selection.skillName} (index ${skillIndex}; ${selection.reason})`,
     '',
   ];
 
@@ -208,6 +293,7 @@ export async function handleCompareGemSetups(
   args: {
     build_name: string;
     skill_index?: number;
+    skill_name?: string;
     setups: Array<{ name: string; gems: string[] }>;
   }
 ) {
@@ -224,12 +310,13 @@ export async function handleCompareGemSetups(
   const buildData = await buildService.readBuild(args.build_name);
 
   // Get active skill name for context
-  const skills = extractSkills(buildData);
-  const skillIndex = args.skill_index || 0;
-  const activeSkillName = skills[skillIndex]?.gems[0]?.nameSpec || "Unknown Skill";
+  const selection = resolveSkillSelection(buildData, args);
+  const activeSkillName = selection.skillName;
 
   const outputLines: string[] = [
     `=== Gem Setup Comparison for ${activeSkillName} ===`,
+    '',
+    `Selected Skill: ${activeSkillName} (index ${selection.index}; ${selection.reason})`,
     '',
     'NOTE: Live DPS simulation per-setup is not yet supported (gem-swap requires PoB API extension).',
     'Showing structural analysis of each setup.',
@@ -373,6 +460,7 @@ export async function handleFindOptimalLinks(
   args: {
     build_name: string;
     skill_index?: number;
+    skill_name?: string;
     link_count: number;
     budget?: "league_start" | "mid_league" | "endgame";
     optimize_for?: "dps" | "clear_speed" | "bossing" | "defense";
@@ -389,7 +477,8 @@ export async function handleFindOptimalLinks(
   }
 
   const buildData = await buildService.readBuild(args.build_name);
-  const skillIndex = args.skill_index || 0;
+  const selection = resolveSkillSelection(buildData, args);
+  const skillIndex = selection.index;
 
   const analysis = skillGemService.analyzeSkillLinks(buildData, skillIndex);
   const suggestions = skillGemService.suggestSupportGems(buildData, skillIndex, {
@@ -405,6 +494,7 @@ export async function handleFindOptimalLinks(
   const outputLines: string[] = [
     `=== Optimal ${args.link_count}-Link for ${analysis.activeSkill.name} ===`,
     '',
+    `Selected Skill: ${selection.skillName} (index ${skillIndex}; ${selection.reason})`,
     `Optimization Target: ${optimizeFor.toUpperCase()}`,
     `Budget: ${budget.replace("_", " ").replace(/\b\w/g, (l) => l.toUpperCase())}`,
     '',
@@ -619,15 +709,19 @@ export async function handleGemUpgradePath(
 /**
  * Helper: Extract skills from build
  */
-function extractSkills(build: any): Array<{ gems: any[]; slot: string }> {
-  const skills: Array<{ gems: any[]; slot: string }> = [];
+function extractSkills(build: any): ExtractedSkillGroup[] {
+  const skills: ExtractedSkillGroup[] = [];
 
   if (build.Skills?.SkillSet) {
     const skillSets = Array.isArray(build.Skills.SkillSet)
       ? build.Skills.SkillSet
       : [build.Skills.SkillSet];
+    const activeSkillSetId = String(build.Skills.activeSkillSet ?? skillSets[0]?.id ?? "1");
 
-    for (const skillSet of skillSets) {
+    for (let skillSetIndex = 0; skillSetIndex < skillSets.length; skillSetIndex++) {
+      const skillSet = skillSets[skillSetIndex];
+      const skillSetId = String(skillSet.id ?? skillSetIndex + 1);
+      const isInActiveSet = skillSetId === activeSkillSetId;
       if (skillSet.Skill) {
         const skillArray = Array.isArray(skillSet.Skill) ? skillSet.Skill : [skillSet.Skill];
 
@@ -635,8 +729,13 @@ function extractSkills(build: any): Array<{ gems: any[]; slot: string }> {
           if (skill.Gem) {
             const gems = Array.isArray(skill.Gem) ? skill.Gem : [skill.Gem];
             skills.push({
+              index: skills.length,
               gems,
               slot: skill.slot || "Unknown",
+              activeSkillName: gemName(gems[0]),
+              isMain: isInActiveSet && isTruthy(skill.mainActiveSkill),
+              isEnabled: !isFalsey(skill.enabled),
+              isInActiveSet,
             });
           }
         }
