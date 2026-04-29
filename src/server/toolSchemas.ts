@@ -1070,7 +1070,11 @@ export function getSkillGemToolSchemas(): any[] {
           },
           skill_index: {
             type: "number",
-            description: "Which skill to analyze (0 = main skill, default: 0)",
+            description: "Zero-based skill group index. If omitted, uses skill_name when provided, otherwise the XML mainActiveSkill group when detectable.",
+          },
+          skill_name: {
+            type: "string",
+            description: "Exact active skill gem name to analyze. Prefer this over skill_index when you know the target skill.",
           },
         },
         required: ["build_name"],
@@ -1088,7 +1092,11 @@ export function getSkillGemToolSchemas(): any[] {
           },
           skill_index: {
             type: "number",
-            description: "Which skill to optimize (0 = main skill, default: 0)",
+            description: "Zero-based skill group index. If omitted, uses skill_name when provided, otherwise the XML mainActiveSkill group when detectable.",
+          },
+          skill_name: {
+            type: "string",
+            description: "Exact active skill gem name to optimize. Prefer this over skill_index when you know the target skill.",
           },
           count: {
             type: "number",
@@ -1118,7 +1126,11 @@ export function getSkillGemToolSchemas(): any[] {
           },
           skill_index: {
             type: "number",
-            description: "Which skill to test (default: 0)",
+            description: "Zero-based skill group index. If omitted, uses skill_name when provided, otherwise the XML mainActiveSkill group when detectable.",
+          },
+          skill_name: {
+            type: "string",
+            description: "Exact active skill gem name to test. Prefer this over skill_index when you know the target skill.",
           },
           setups: {
             type: "array",
@@ -1169,7 +1181,11 @@ export function getSkillGemToolSchemas(): any[] {
           },
           skill_index: {
             type: "number",
-            description: "Which skill to optimize (default: 0)",
+            description: "Zero-based skill group index. If omitted, uses skill_name when provided, otherwise the XML mainActiveSkill group when detectable.",
+          },
+          skill_name: {
+            type: "string",
+            description: "Exact active skill gem name to optimize. Prefer this over skill_index when you know the target skill.",
           },
           link_count: {
             type: "number",

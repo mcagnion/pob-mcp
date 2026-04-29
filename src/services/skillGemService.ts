@@ -103,10 +103,10 @@ export class SkillGemService {
 
     return {
       activeSkill: {
-        name: activeGem.nameSpec || activeGem.gemId || "Unknown",
+        name: this.gemName(activeGem),
         level: activeGem.level || 1,
         quality: activeGem.quality || 0,
-        tags: this.getGemTags(activeGem.nameSpec || activeGem.gemId || ""),
+        tags: this.getGemTags(this.gemName(activeGem)),
       },
       supports,
       archetype: archetype.name,
@@ -223,7 +223,7 @@ export class SkillGemService {
     const corruptionTargets: Array<{ gem: string; target: string; risk: string }> = [];
 
     for (const gem of allGems) {
-      const name = gem.nameSpec || gem.gemId || "Unknown";
+      const name = this.gemName(gem);
       const level = gem.level || 1;
       const quality = gem.quality || 0;
 
@@ -301,7 +301,7 @@ export class SkillGemService {
    * Detect build archetype
    */
   private detectArchetype(activeGem: any, build: PoBBuild): ArchetypeTemplate {
-    const gemName = activeGem.nameSpec || activeGem.gemId || "";
+    const gemName = this.gemName(activeGem);
     const tags = this.getGemTags(gemName);
 
     // Try to match archetype based on tags
@@ -320,7 +320,7 @@ export class SkillGemService {
    * Calculate archetype match percentage
    */
   private calculateArchetypeMatch(supports: any[], archetype: ArchetypeTemplate): number {
-    const supportNames = supports.map((s) => s.nameSpec || s.gemId || "");
+    const supportNames = supports.map((s) => this.gemName(s));
     const recommended = archetype.recommended_supports.map((r) => r.gem);
     const avoided = archetype.avoid_supports;
 
@@ -353,7 +353,7 @@ export class SkillGemService {
     issues?: string[];
     recommendations?: string[];
   } {
-    const name = gem.nameSpec || gem.gemId || "Unknown";
+    const name = this.gemName(gem);
     const level = gem.level || 1;
     const quality = gem.quality || 0;
 
@@ -407,7 +407,7 @@ export class SkillGemService {
    */
   private detectIssues(activeGem: any, supports: any[], archetype: ArchetypeTemplate): string[] {
     const issues: string[] = [];
-    const supportNames = supports.map((s) => s.nameSpec || s.gemId || "");
+    const supportNames = supports.map((s) => this.gemName(s));
 
     // Check for missing recommended supports
     const missingRecommended = archetype.recommended_supports
@@ -494,6 +494,10 @@ export class SkillGemService {
   private getGemTags(gemName: string): string[] {
     const gemData = this.gemDatabase.get(gemName);
     return gemData?.tags || [];
+  }
+
+  private gemName(gem: any): string {
+    return gem?.nameSpec || gem?.name || gem?.gemId || "Unknown";
   }
 
   /**
