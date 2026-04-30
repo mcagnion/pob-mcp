@@ -366,6 +366,52 @@ describe('PoBLuaApiClient', () => {
         });
       });
     });
+
+    describe('gem enabled previews', () => {
+      it('should send set_gem_enabled action', async () => {
+        await client.setGemEnabled({ groupIndex: 1, gemIndex: 2, enabled: false });
+
+        const lastRequest = mockProcess.getLastRequest();
+        expect(lastRequest).toEqual({
+          action: 'set_gem_enabled',
+          params: { groupIndex: 1, gemIndex: 2, enabled: false },
+        });
+      });
+
+      it('should request a non-destructive single gem enabled preview', async () => {
+        const result = await client.previewGemEnabled({
+          groupIndex: 1,
+          gemIndex: 2,
+          enabled: false,
+          fields: ['FullDPS', 'TotalDPS'],
+        });
+
+        const lastRequest = mockProcess.getLastRequest();
+        expect(lastRequest).toEqual({
+          action: 'preview_gem_enabled',
+          params: { groupIndex: 1, gemIndex: 2, enabled: false, fields: ['FullDPS', 'TotalDPS'] },
+        });
+        expect(result.restored).toBe(true);
+        expect(result.before.FullDPS).toBe(1000);
+      });
+
+      it('should request a batch gem enabled preview', async () => {
+        const result = await client.previewGemEnabledBatch({
+          groupIndex: 1,
+          gemIndices: [2, 3],
+          enabled: false,
+          fields: ['FullDPS'],
+        });
+
+        const lastRequest = mockProcess.getLastRequest();
+        expect(lastRequest).toEqual({
+          action: 'preview_gem_enabled_batch',
+          params: { groupIndex: 1, gemIndices: [2, 3], enabled: false, fields: ['FullDPS'] },
+        });
+        expect(result.groupIndex).toBe(1);
+        expect(result.results[0].restored).toBe(true);
+      });
+    });
   });
 
   describe('Error Handling', () => {

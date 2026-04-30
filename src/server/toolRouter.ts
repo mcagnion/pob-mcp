@@ -24,7 +24,7 @@ import { handleAnalyzeItems, handleOptimizeSkillLinks, handleCreateBudgetBuild }
 import { handleGetConfig, handleSetConfig, handleSetEnemyStats, handleSaveConfigPreset, handleLoadConfigPreset, handleListConfigPresets } from "../handlers/configHandlers.js";
 import { handleValidateBuild } from "../handlers/validationHandlers.js";
 import { handleExportBuild, handleSaveTree, handleSnapshotBuild, handleListSnapshots, handleRestoreSnapshot, handleExportBuildSummary } from "../handlers/exportHandlers.js";
-import { handleAnalyzeSkillLinks, handleSuggestSupportGems, handleCompareGemSetups, handleValidateGemQuality, handleFindOptimalLinks, handleGemUpgradePath } from "../handlers/skillGemHandlers.js";
+import { handleAnalyzeSkillLinks, handleSuggestSupportGems, handleCompareGemSetups, handleValidateGemQuality, handleMeasureGemContribution, handleMeasureLinkContributions, handleFindOptimalLinks, handleGemUpgradePath } from "../handlers/skillGemHandlers.js";
 import { handleSearchTradeItems, handleGetItemPrice, handleGetLeagues, handleSearchStats, handleFindItemUpgrades, handleFindResistanceGear, handleCompareTradeItems } from "../handlers/tradeHandlers.js";
 import { handleGetCurrencyRates, handleFindArbitrage, handleCalculateTradingProfit } from "../handlers/poeNinjaHandlers.js";
 import { handleSearchClusterJewels, handleAnalyzeClusterJewels, handleAnalyzeBuildClusterJewels } from "../handlers/clusterJewelHandlers.js";
@@ -485,6 +485,12 @@ export async function routeToolCall(
 
     case "validate_gem_quality":
       return await handleValidateGemQuality(skillGemContext, args);
+
+    case "measure_gem_contribution":
+      return await handleMeasureGemContribution(skillGemContext, args);
+
+    case "measure_link_contributions":
+      return await handleMeasureLinkContributions(skillGemContext, args);
 
     case "find_optimal_links":
       if (!args) throw new Error("Missing arguments");

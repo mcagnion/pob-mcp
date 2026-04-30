@@ -65,7 +65,8 @@ export const MOCK_RESPONSES = {
   },
   add_item_text: {
     ok: true,
-    result: {
+    // Payload keys mirror API/Handlers.lua: actions with named return values use those names, previews use result.
+    item: {
       id: 123,
       name: 'Steel Blade',
       slot: 'Weapon 1',
@@ -74,7 +75,7 @@ export const MOCK_RESPONSES = {
   set_flask_active: { ok: true },
   get_skills: {
     ok: true,
-    result: {
+    skills: {
       mainSocketGroup: 1,
       calcsSkillNumber: 1,
       groups: [
@@ -107,6 +108,36 @@ export const MOCK_RESPONSES = {
     },
   },
   set_main_selection: { ok: true },
+  set_gem_quality: { ok: true },
+  set_gem_enabled: { ok: true },
+  preview_gem_enabled: {
+    ok: true,
+    result: {
+      before: { FullDPS: 1000, TotalDPS: 500, Speed: 2 },
+      after: { FullDPS: 700, TotalDPS: 350, Speed: 2 },
+      restoredStats: { FullDPS: 1000, TotalDPS: 500, Speed: 2 },
+      restored: true,
+      gemBefore: { name: 'Inspiration Support', level: 20, quality: 20, enabled: true, isSupport: true },
+      gemPreview: { name: 'Inspiration Support', level: 20, quality: 20, enabled: false, isSupport: true },
+      gemRestored: { name: 'Inspiration Support', level: 20, quality: 20, enabled: true, isSupport: true },
+    },
+  },
+  preview_gem_enabled_batch: {
+    ok: true,
+    result: {
+      groupIndex: 1,
+      enabled: false,
+      results: [
+        {
+          ok: true,
+          gemIndex: 2,
+          before: { FullDPS: 1000, TotalDPS: 500, Speed: 2 },
+          after: { FullDPS: 700, TotalDPS: 350, Speed: 2 },
+          restored: true,
+        },
+      ],
+    },
+  },
   get_config: {
     ok: true,
     config: {

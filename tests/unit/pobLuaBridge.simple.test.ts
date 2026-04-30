@@ -100,6 +100,12 @@ describe('PoBLuaApiClient - Simple Tests', () => {
     it('should have setMainSelection method', () => {
       expect(typeof client.setMainSelection).toBe('function');
     });
+
+    it('should have gem enabled preview methods', () => {
+      expect(typeof client.setGemEnabled).toBe('function');
+      expect(typeof client.previewGemEnabled).toBe('function');
+      expect(typeof client.previewGemEnabledBatch).toBe('function');
+    });
   });
 });
 

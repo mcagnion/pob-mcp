@@ -329,6 +329,7 @@ class PoBMCPServer {
                                 // Additional tools that can produce large responses:
                                 'validate_build', 'get_passive_upgrades', 'analyze_skill_links',
                                 'suggest_support_gems', 'find_optimal_links', 'compare_gem_setups',
+                                'measure_gem_contribution', 'measure_link_contributions',
                                 'lua_get_stats', 'suggest_masteries'];
 
         if (truncatedTools.includes(name)) {

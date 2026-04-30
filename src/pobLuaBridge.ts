@@ -16,6 +16,22 @@ export interface PoBLuaApiOptions {
   timeoutMs?: number; // per-request timeout
 }
 
+export interface GemEnabledPreviewResult {
+  before: Record<string, any>;
+  after: Record<string, any>;
+  restoredStats?: Record<string, any>;
+  restored: boolean;
+  gemBefore?: { name?: string; level?: number; quality?: number; qualityId?: string; enabled?: boolean; isSupport?: boolean };
+  gemPreview?: { name?: string; level?: number; quality?: number; qualityId?: string; enabled?: boolean; isSupport?: boolean };
+  gemRestored?: { name?: string; level?: number; quality?: number; qualityId?: string; enabled?: boolean; isSupport?: boolean };
+}
+
+export interface GemEnabledPreviewBatchResult {
+  groupIndex: number;
+  enabled: boolean;
+  results: Array<GemEnabledPreviewResult & { ok?: boolean; gemIndex?: number; error?: string }>;
+}
+
 export class PoBLuaApiClient {
   private proc: ChildProcessWithoutNullStreams | null = null;
   private options: PoBLuaApiOptions;
@@ -418,6 +434,28 @@ async setTree(params: {
     };
   }
 
+  async previewGemEnabled(params: {
+    groupIndex: number;
+    gemIndex: number;
+    enabled: boolean;
+    fields?: string[];
+  }): Promise<GemEnabledPreviewResult> {
+    const res = await this.send({ action: "preview_gem_enabled", params });
+    if (!res.ok) throw new Error(res.error || "preview_gem_enabled failed");
+    return res.result as GemEnabledPreviewResult;
+  }
+
+  async previewGemEnabledBatch(params: {
+    groupIndex: number;
+    gemIndices?: number[];
+    enabled?: boolean;
+    fields?: string[];
+  }): Promise<GemEnabledPreviewBatchResult> {
+    const res = await this.send({ action: "preview_gem_enabled_batch", params });
+    if (!res.ok) throw new Error(res.error || "preview_gem_enabled_batch failed");
+    return res.result as GemEnabledPreviewBatchResult;
+  }
+
   async removeSkill(params: { groupIndex: number }): Promise<void> {
     const res = await this.send({ action: "remove_skill", params });
     if (!res.ok) throw new Error(res.error || "remove_skill failed");
@@ -515,3 +553,4 @@ async setTree(params: {
   }
 }
 
+export { PoBLuaApiClient as PoBLuaTcpClient };
