@@ -320,8 +320,6 @@ export class SkillGemService {
       }
     }
 
-    needsQuality.sort((a, b) => b.qualityGap - a.qualityGap);
-
     return {
       needsQuality,
       exceptionalUpgrades,
