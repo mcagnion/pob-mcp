@@ -122,6 +122,7 @@ describe('gem quality validation', () => {
     expect(text).toContain('Speed: 2 -> 2.1 (+0.1, +5%)');
     expect(text).toContain('Priority: Greater Volley Support has the highest measured DPS-field delta (+120');
     expect(text).not.toContain('not a DPS ranking');
+    expect(text).not.toContain('highest impact');
   });
 
   it('keeps zero modeled quality deltas separate from QoL or untracked effects', async () => {
