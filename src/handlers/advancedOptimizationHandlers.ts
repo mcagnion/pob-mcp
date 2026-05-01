@@ -20,6 +20,9 @@ export interface AdvancedOptimizationContext {
   ensureLuaClient: () => Promise<void>;
 }
 
+const LINK_MEASUREMENT_GUARDRAIL =
+  'Guardrail: before replacing supports, run measure_link_contributions on the loaded build; estimates here are structural and not a measured DPS ranking.';
+
 /**
  * Analyze equipped items and suggest upgrades
  */
@@ -262,12 +265,13 @@ export async function handleOptimizeSkillLinks(
     // Analyze skill setup
     const optimization = analyzeSkillSetup(skillGroups, buildArchetype);
     const formatted = formatSkillOptimization(optimization);
+    const text = `${formatted}\n${LINK_MEASUREMENT_GUARDRAIL}`;
 
     return {
       content: [
         {
           type: "text" as const,
-          text: formatted,
+          text,
         },
       ],
     };

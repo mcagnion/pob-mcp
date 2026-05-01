@@ -32,6 +32,15 @@ const GEM_QUALITY_DPS_PRIORITY_FIELDS = [
   'TotalDotDPS',
 ];
 
+const GEM_CONTRIBUTION_PREVIEW_FIELDS = GEM_QUALITY_PREVIEW_FIELDS;
+const GEM_CONTRIBUTION_DPS_PRIORITY_FIELDS = GEM_QUALITY_DPS_PRIORITY_FIELDS;
+const GEM_CONTRIBUTION_WARNING =
+  'Measured contribution is marginal at the current configuration; values are not additive across multiple gem changes.';
+const LINK_MEASUREMENT_GUARDRAIL =
+  'Guardrail: before replacing supports, run measure_link_contributions on the loaded build; estimates here are structural and not a measured DPS ranking.';
+const DEFAULT_HEURISTIC_GEM_MEASUREMENT = 'heuristic estimate only (not live PoB DPS)';
+const DEFAULT_UNVERIFIED_GEM_ACQUISITION = 'unverified in requested league';
+
 interface SkillSelectorArgs {
   skill_index?: number;
   skill_name?: string;
@@ -63,6 +72,32 @@ interface GemQualityMeasurement {
   error?: string;
 }
 
+interface GemIdentity {
+  groupIndex: number;
+  groupLabel: string;
+  slot: string;
+  gemIndex: number;
+  name: string;
+  level?: number;
+  quality?: number;
+  enabled: boolean;
+  isSupport: boolean;
+}
+
+interface GemContributionMeasurement extends GemIdentity {
+  restored: boolean;
+  before: Record<string, any>;
+  after: Record<string, any>;
+  restoredStats?: Record<string, any>;
+  primaryField?: string;
+  primaryBefore?: number;
+  primaryAfter?: number;
+  contribution: number | null;
+  contributionPercent: number | null;
+  alreadyDisabled: boolean;
+  error?: string;
+}
+
 function gemName(gem: any): string {
   return gem?.nameSpec || gem?.name || gem?.gemId || "Unknown Skill";
 }
@@ -78,7 +113,16 @@ function isFalsey(value: unknown): boolean {
 function resolveSkillSelection(build: any, args?: SkillSelectorArgs): ResolvedSkillSelection {
   const skills = extractSkills(build);
   if (skills.length === 0) {
-    throw new Error("No skill groups found in build.");
+    if (args?.skill_name?.trim()) {
+      throw new Error(`Skill "${args.skill_name}" not found. No skill groups found in build.`);
+    }
+    // Minimal build objects can still use service-level default skill index 0;
+    // explicit skill_name requests fail above so misspelled names are not hidden.
+    return {
+      index: args?.skill_index ?? 0,
+      skillName: "Unknown Skill",
+      reason: "no parseable skill groups; using service default skill index",
+    };
   }
 
   if (args?.skill_name?.trim()) {
@@ -185,6 +229,242 @@ function measurementDeltaLines(measurement: GemQualityMeasurement): string[] {
     }
   }
   return changedLines;
+}
+
+function statSnapshotLine(label: string, stats: Record<string, any> | undefined): string {
+  const entries = GEM_CONTRIBUTION_PREVIEW_FIELDS
+    .map((field) => {
+      const value = numericStat(stats, field);
+      return value == null ? null : `${field}=${formatNumber(value)}`;
+    })
+    .filter((entry): entry is string => entry !== null);
+  return `${label}: ${entries.length > 0 ? entries.join(', ') : 'no tracked fields returned'}`;
+}
+
+function contributionDeltaLines(measurement: GemContributionMeasurement): string[] {
+  const changedLines: string[] = [];
+  for (const field of GEM_CONTRIBUTION_PREVIEW_FIELDS) {
+    const before = numericStat(measurement.before, field);
+    const after = numericStat(measurement.after, field);
+    if (before == null || after == null) continue;
+    if (before !== after) {
+      changedLines.push(formatMeasuredDelta(field, before, after));
+    }
+  }
+  return changedLines;
+}
+
+function primaryContribution(
+  beforeStats: Record<string, any>,
+  afterStats: Record<string, any>
+): { field: string; before: number; after: number; loss: number; percent: number | null } | null {
+  for (const field of GEM_CONTRIBUTION_DPS_PRIORITY_FIELDS) {
+    const before = numericStat(beforeStats, field);
+    const after = numericStat(afterStats, field);
+    if (before != null && after != null) {
+      const loss = before - after;
+      return {
+        field,
+        before,
+        after,
+        loss,
+        percent: before !== 0 ? (loss / before) * 100 : null,
+      };
+    }
+  }
+  return null;
+}
+
+function groupGemList(group: any): any[] {
+  if (Array.isArray(group?.gems) && group.gems.length > 0) {
+    return group.gems;
+  }
+  if (Array.isArray(group?.skills)) {
+    return group.skills.map((skillName: string, index: number) => ({
+      index: index + 1,
+      name: skillName,
+      enabled: true,
+      isSupport: index > 0,
+    }));
+  }
+  return [];
+}
+
+function gemIdentity(group: any, gem: any, fallbackIndex: number): GemIdentity {
+  const gemIndex = Number(gem?.index ?? fallbackIndex);
+  return {
+    groupIndex: Number(group?.index),
+    groupLabel: group?.label || `Group ${group?.index ?? '?'}`,
+    slot: group?.slot || 'Unknown',
+    gemIndex,
+    name: gem?.name || gem?.nameSpec || `Gem ${gemIndex}`,
+    level: typeof gem?.level === 'number' ? gem.level : undefined,
+    quality: typeof gem?.quality === 'number' ? gem.quality : undefined,
+    enabled: gem?.enabled !== false,
+    isSupport: gem?.isSupport === true || (typeof gem?.name === 'string' && gem.name.includes('Support')),
+  };
+}
+
+function findSkillGroup(skills: any, groupIndex?: number): any | null {
+  const groups = Array.isArray(skills?.groups) ? skills.groups : [];
+  if (groups.length === 0) return null;
+  const targetIndex = groupIndex ?? Number(skills?.mainSocketGroup ?? groups[0]?.index);
+  return groups.find((group: any) => Number(group?.index) === targetIndex) ?? null;
+}
+
+function findGemInGroup(group: any, gemIndex: number): { gem: any; fallbackIndex: number } | null {
+  const gems = groupGemList(group);
+  for (let index = 0; index < gems.length; index++) {
+    const gem = gems[index];
+    const candidateIndex = Number(gem?.index ?? index + 1);
+    if (candidateIndex === gemIndex) {
+      return { gem, fallbackIndex: index + 1 };
+    }
+  }
+  return null;
+}
+
+async function getLiveGemContext(
+  context: SkillGemHandlerContext,
+  buildName: string | undefined,
+  rerunToolName: string
+): Promise<
+  | { ok: true; luaClient: PoBLuaApiClient; skills: any; loadedName: string }
+  | { ok: false; message: string }
+> {
+  const luaClient = context.getLuaClient?.() ?? null;
+  if (!luaClient || !luaClient.isAlive()) {
+    return {
+      ok: false,
+      message: `Measurement unavailable: Lua bridge is not active. Use lua_load_build for the build, then rerun ${rerunToolName}. No ranking produced.`,
+    };
+  }
+
+  let info: any;
+  try {
+    info = await luaClient.getBuildInfo();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      message: `Measurement unavailable: could not read loaded build info (${msg}). Use lua_load_build first, then rerun ${rerunToolName}. No ranking produced.`,
+    };
+  }
+
+  const loadedNameRaw = info?.name ?? info?.buildName ?? '';
+  const loadedName = loadedNameRaw ? String(loadedNameRaw) : 'current loaded build';
+  if (buildName) {
+    const loadedNormalized = normalizeBuildName(loadedName);
+    const requestedNormalized = normalizeBuildName(buildName);
+    if (loadedNormalized && requestedNormalized && loadedNormalized !== requestedNormalized) {
+      return {
+        ok: false,
+        message: `Measurement unavailable: Lua bridge has "${loadedName}" loaded, not "${buildName}". Use lua_load_build("${buildName}") first. No ranking produced.`,
+      };
+    }
+  }
+
+  try {
+    const skills = await luaClient.getSkills();
+    return { ok: true, luaClient, skills, loadedName };
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      message: `Measurement unavailable: could not read loaded skill gems (${msg}). No ranking produced.`,
+    };
+  }
+}
+
+async function measureGemDisable(
+  luaClient: PoBLuaApiClient,
+  identity: GemIdentity
+): Promise<GemContributionMeasurement> {
+  if (!identity.enabled) {
+    return {
+      ...identity,
+      restored: true,
+      before: {},
+      after: {},
+      contribution: 0,
+      contributionPercent: 0,
+      alreadyDisabled: true,
+    };
+  }
+
+  try {
+    const preview = await luaClient.previewGemEnabled({
+      groupIndex: identity.groupIndex,
+      gemIndex: identity.gemIndex,
+      enabled: false,
+      fields: GEM_CONTRIBUTION_PREVIEW_FIELDS,
+    });
+    if (preview.restored !== true) {
+      throw new Error('preview did not restore original gem state');
+    }
+    const primary = primaryContribution(preview.before ?? {}, preview.after ?? {});
+    return {
+      ...identity,
+      restored: preview.restored === true,
+      before: preview.before ?? {},
+      after: preview.after ?? {},
+      restoredStats: preview.restoredStats,
+      primaryField: primary?.field,
+      primaryBefore: primary?.before,
+      primaryAfter: primary?.after,
+      contribution: primary?.loss ?? null,
+      contributionPercent: primary?.percent ?? null,
+      alreadyDisabled: false,
+    };
+  } catch (error) {
+    return {
+      ...identity,
+      restored: false,
+      before: {},
+      after: {},
+      contribution: null,
+      contributionPercent: null,
+      alreadyDisabled: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function appendContributionDetails(outputLines: string[], measurement: GemContributionMeasurement): void {
+  outputLines.push(`${measurement.name} (${measurement.isSupport ? 'support' : 'active'} gem)`);
+  outputLines.push(`Location: group_index=${measurement.groupIndex}, gem_index=${measurement.gemIndex}, slot=${measurement.slot}, group=${measurement.groupLabel}`);
+
+  if (measurement.alreadyDisabled) {
+    outputLines.push('current_contribution: 0 (gem already disabled in this configuration)');
+    return;
+  }
+
+  if (measurement.error) {
+    outputLines.push(`Measurement failed: ${measurement.error}`);
+    return;
+  }
+
+  outputLines.push(`Restored: ${measurement.restored ? 'yes' : 'no'}`);
+  outputLines.push(statSnapshotLine('Before', measurement.before));
+  outputLines.push(statSnapshotLine('After disabling', measurement.after));
+
+  if (measurement.primaryField && measurement.primaryBefore != null && measurement.primaryAfter != null && measurement.contribution != null) {
+    const percent = measurement.contributionPercent != null
+      ? ` (${formatNumber(measurement.contributionPercent)}% of current)`
+      : '';
+    outputLines.push(`Primary DPS-field loss: ${formatMeasuredDelta(measurement.primaryField, measurement.primaryBefore, measurement.primaryAfter)}`);
+    outputLines.push(`current_contribution: ${formatNumber(measurement.contribution)} ${measurement.primaryField}${percent}`);
+  } else {
+    outputLines.push(`current_contribution: no modeled DPS-field loss across tracked fields (${GEM_CONTRIBUTION_PREVIEW_FIELDS.join(', ')})`);
+  }
+
+  const deltaLines = contributionDeltaLines(measurement);
+  if (deltaLines.length > 0) {
+    outputLines.push('Tracked stat deltas:');
+    for (const line of deltaLines) {
+      outputLines.push(`- ${line}`);
+    }
+  }
 }
 
 async function measureGemQuality(
@@ -382,6 +662,7 @@ export async function handleSuggestSupportGems(
     `=== Support Gem Recommendations for ${analysis.activeSkill.name} ===`,
     '',
     `Selected Skill: ${selection.skillName} (index ${skillIndex}; ${selection.reason})`,
+    LINK_MEASUREMENT_GUARDRAIL,
     '',
   ];
 
@@ -402,18 +683,22 @@ export async function handleSuggestSupportGems(
 
   for (let i = 0; i < suggestions.length; i++) {
     const suggestion = suggestions[i];
+    const measured = suggestion.measured ?? DEFAULT_HEURISTIC_GEM_MEASUREMENT;
+    const acquirable = suggestion.acquirable ?? DEFAULT_UNVERIFIED_GEM_ACQUISITION;
+    const priceChecked = suggestion.priceChecked === true;
+    const feasibilityNotes = suggestion.feasibilityNotes ?? [];
 
     outputLines.push(`${i + 1}. ${suggestion.gem}`);
     if (suggestion.replaces) {
       outputLines.push(`   Replaces: ${suggestion.replaces}`);
     }
     outputLines.push(`   Est. DPS Increase: +${suggestion.dpsIncrease.toFixed(1)}%`);
-    outputLines.push(`   Measured: ${suggestion.measured}`);
-    outputLines.push(`   Acquirable: ${suggestion.acquirable}`);
-    outputLines.push(`   Price-checked: ${suggestion.priceChecked ? "yes" : "no"}`);
+    outputLines.push(`   Measured: ${measured}`);
+    outputLines.push(`   Acquirable: ${acquirable}`);
+    outputLines.push(`   Price-checked: ${priceChecked ? "yes" : "no"}`);
     outputLines.push(`   Why: ${suggestion.reasoning}`);
     outputLines.push(`   Price: ${suggestion.cost}`);
-    for (const note of suggestion.feasibilityNotes) {
+    for (const note of feasibilityNotes) {
       outputLines.push(`   Note: ${note}`);
     }
 
@@ -675,6 +960,138 @@ export async function handleValidateGemQuality(
 }
 
 /**
+ * Handle measure_gem_contribution tool call
+ */
+export async function handleMeasureGemContribution(
+  context: SkillGemHandlerContext,
+  args?: { build_name?: string; group_index?: number; gem_index?: number }
+) {
+  return wrapHandler('measure gem contribution', async () => {
+    if (!args?.group_index || args.group_index < 1) {
+      throw new Error('group_index must be >= 1');
+    }
+    if (!args?.gem_index || args.gem_index < 1) {
+      throw new Error('gem_index must be >= 1');
+    }
+
+    const live = await getLiveGemContext(context, args.build_name, 'measure_gem_contribution');
+    if (!live.ok) {
+      return { content: [{ type: 'text' as const, text: `=== Gem Contribution Measurement ===\n\n${live.message}` }] };
+    }
+
+    const group = findSkillGroup(live.skills, args.group_index);
+    if (!group) {
+      throw new Error(`socket group ${args.group_index} not found in loaded build`);
+    }
+    const gemMatch = findGemInGroup(group, args.gem_index);
+    if (!gemMatch) {
+      throw new Error(`gem ${args.gem_index} not found in socket group ${args.group_index}`);
+    }
+
+    const identity = gemIdentity(group, gemMatch.gem, gemMatch.fallbackIndex);
+    const measurement = await measureGemDisable(live.luaClient, identity);
+    const outputLines = [
+      '=== Gem Contribution Measurement ===',
+      '',
+      args.build_name
+        ? `Build context: requested "${args.build_name}" matches loaded build "${live.loadedName}".`
+        : `Build context: measuring currently loaded build "${live.loadedName}".`,
+      GEM_CONTRIBUTION_WARNING,
+      '',
+    ];
+
+    appendContributionDetails(outputLines, measurement);
+
+    return {
+      content: [{ type: 'text' as const, text: outputLines.join('\n') }],
+    };
+  });
+}
+
+/**
+ * Handle measure_link_contributions tool call
+ */
+export async function handleMeasureLinkContributions(
+  context: SkillGemHandlerContext,
+  args?: { build_name?: string; group_index?: number }
+) {
+  return wrapHandler('measure link contributions', async () => {
+    if (args?.group_index != null && args.group_index < 1) {
+      throw new Error('group_index must be >= 1');
+    }
+
+    const live = await getLiveGemContext(context, args?.build_name, 'measure_link_contributions');
+    if (!live.ok) {
+      return { content: [{ type: 'text' as const, text: `=== Link Contribution Measurement ===\n\n${live.message}` }] };
+    }
+
+    const group = findSkillGroup(live.skills, args?.group_index);
+    if (!group) {
+      throw new Error(args?.group_index ? `socket group ${args.group_index} not found in loaded build` : 'main socket group not found in loaded build');
+    }
+
+    const gems = groupGemList(group);
+    const measurements: GemContributionMeasurement[] = [];
+    for (let index = 0; index < gems.length; index++) {
+      const identity = gemIdentity(group, gems[index], index + 1);
+      const measurement = await measureGemDisable(live.luaClient, identity);
+      measurements.push(measurement);
+      if (measurement.error && /restore/i.test(measurement.error)) {
+        break;
+      }
+    }
+
+    const measured = measurements
+      .filter((measurement) => !measurement.alreadyDisabled && !measurement.error)
+      .sort((a, b) => (b.contribution ?? Number.NEGATIVE_INFINITY) - (a.contribution ?? Number.NEGATIVE_INFINITY));
+    const alreadyDisabled = measurements.filter((measurement) => measurement.alreadyDisabled);
+    const failed = measurements.filter((measurement) => measurement.error);
+
+    const outputLines = [
+      '=== Link Contribution Measurement ===',
+      '',
+      args?.build_name
+        ? `Build context: requested "${args.build_name}" matches loaded build "${live.loadedName}".`
+        : `Build context: measuring currently loaded build "${live.loadedName}".`,
+      `Group: ${group?.label || `Group ${group?.index}`} (group_index=${group?.index}, slot=${group?.slot || 'Unknown'})`,
+      GEM_CONTRIBUTION_WARNING,
+      '',
+    ];
+
+    if (measured.length > 0) {
+      outputLines.push('Measured current contributions, sorted by primary DPS-field loss:');
+      for (let index = 0; index < measured.length; index++) {
+        const measurement = measured[index];
+        outputLines.push('');
+        outputLines.push(`${index + 1}.`);
+        appendContributionDetails(outputLines, measurement);
+      }
+    } else {
+      outputLines.push('No enabled gems produced a measured DPS-field contribution.');
+    }
+
+    if (alreadyDisabled.length > 0) {
+      outputLines.push('', 'Already disabled gems:');
+      for (const measurement of alreadyDisabled) {
+        outputLines.push(`- ${measurement.name} (group_index=${measurement.groupIndex}, gem_index=${measurement.gemIndex})`);
+        outputLines.push('  current_contribution: 0 (gem already disabled in this configuration)');
+      }
+    }
+
+    if (failed.length > 0) {
+      outputLines.push('', 'Failed measurements:');
+      for (const measurement of failed) {
+        outputLines.push(`- ${measurement.name} (group_index=${measurement.groupIndex}, gem_index=${measurement.gemIndex}): ${measurement.error}`);
+      }
+    }
+
+    return {
+      content: [{ type: 'text' as const, text: outputLines.join('\n') }],
+    };
+  });
+}
+
+/**
  * Handle find_optimal_links tool call
  */
 export async function handleFindOptimalLinks(
@@ -733,6 +1150,10 @@ export async function handleFindOptimalLinks(
   let cumulativeDPS = 0;
   for (let i = 0; i < Math.min(suggestions.length, args.link_count - 1); i++) {
     const suggestion = suggestions[i];
+    const measured = suggestion.measured ?? DEFAULT_HEURISTIC_GEM_MEASUREMENT;
+    const acquirable = suggestion.acquirable ?? DEFAULT_UNVERIFIED_GEM_ACQUISITION;
+    const priceChecked = suggestion.priceChecked === true;
+    const feasibilityNotes = suggestion.feasibilityNotes ?? [];
     cumulativeDPS += suggestion.dpsIncrease;
 
     let stepLine = `Step ${i + 1}: Add ${suggestion.gem}`;
@@ -740,12 +1161,12 @@ export async function handleFindOptimalLinks(
       stepLine += ` (replace ${suggestion.replaces})`;
     }
     outputLines.push(stepLine);
-    outputLines.push(`Measured: ${suggestion.measured}`);
-    outputLines.push(`Acquirable: ${suggestion.acquirable}`);
-    outputLines.push(`Price-checked: ${suggestion.priceChecked ? "yes" : "no"}`);
+    outputLines.push(`Measured: ${measured}`);
+    outputLines.push(`Acquirable: ${acquirable}`);
+    outputLines.push(`Price-checked: ${priceChecked ? "yes" : "no"}`);
     outputLines.push(`Price: ${suggestion.cost}`);
     outputLines.push(`Est. DPS Increase: +${suggestion.dpsIncrease.toFixed(1)}%`);
-    for (const note of suggestion.feasibilityNotes) {
+    for (const note of feasibilityNotes) {
       outputLines.push(`Note: ${note}`);
     }
     outputLines.push('');

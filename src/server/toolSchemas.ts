@@ -1264,6 +1264,45 @@ export function getSkillGemToolSchemas(): any[] {
       },
     },
     {
+      name: "measure_gem_contribution",
+      description: "Measure the marginal contribution of one currently loaded gem by temporarily disabling it through the Lua bridge, reading before/after stats, and restoring the original state. If build_name is provided, the loaded Lua build must match it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          build_name: {
+            type: "string",
+            description: "Optional build name to verify against the currently loaded Lua build. The tool does not auto-load a different build.",
+          },
+          group_index: {
+            type: "number",
+            description: "Socket group index (1-based)",
+          },
+          gem_index: {
+            type: "number",
+            description: "Gem index inside the socket group (1-based)",
+          },
+        },
+        required: ["group_index", "gem_index"],
+      },
+    },
+    {
+      name: "measure_link_contributions",
+      description: "Measure marginal current contributions for gems in a loaded socket group by disabling each gem one at a time, reading before/after stats, and restoring after every preview. If build_name is provided, the loaded Lua build must match it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          build_name: {
+            type: "string",
+            description: "Optional build name to verify against the currently loaded Lua build. The tool does not auto-load a different build.",
+          },
+          group_index: {
+            type: "number",
+            description: "Socket group index (1-based). Defaults to the loaded build's main socket group.",
+          },
+        },
+      },
+    },
+    {
       name: "find_optimal_links",
       description: "Auto-generate a support gem combination for a skill based on budget and optimization goal. Outputs heuristic DPS estimates plus measured/acquirable/price-checked labels; verify current-league acquisition and prices before buying.",
       inputSchema: {
