@@ -35,6 +35,8 @@ const GEM_CONTRIBUTION_WARNING =
   'Measured contribution is marginal at the current configuration; values are not additive across multiple gem changes.';
 const LINK_MEASUREMENT_GUARDRAIL =
   'Guardrail: before replacing supports, run measure_link_contributions on the loaded build; estimates here are structural and not a measured DPS ranking.';
+const DEFAULT_HEURISTIC_GEM_MEASUREMENT = 'heuristic estimate only (not live PoB DPS)';
+const DEFAULT_UNVERIFIED_GEM_ACQUISITION = 'unverified in requested league';
 
 interface GemQualityMeasurement {
   restored: boolean;
@@ -447,12 +449,98 @@ async function measureGemQuality(
   };
 }
 
+interface SkillSelectorArgs {
+  skill_index?: number;
+  skill_name?: string;
+}
+
+interface ExtractedSkillGroup {
+  index: number;
+  gems: any[];
+  slot: string;
+  activeSkillName: string;
+  isMain: boolean;
+  isEnabled: boolean;
+  isInActiveSet: boolean;
+}
+
+interface ResolvedSkillSelection {
+  index: number;
+  skillName: string;
+  reason: string;
+}
+
+function gemName(gem: any): string {
+  return gem?.nameSpec || gem?.name || gem?.gemId || "Unknown Skill";
+}
+
+function isTruthy(value: unknown): boolean {
+  return value === true || value === 1 || value === "true" || value === "1";
+}
+
+function isFalsey(value: unknown): boolean {
+  return value === false || value === 0 || value === "false" || value === "0";
+}
+
+function resolveSkillSelection(build: any, args?: SkillSelectorArgs): ResolvedSkillSelection {
+  const skills = extractSkills(build);
+  if (skills.length === 0) {
+    if (args?.skill_name?.trim()) {
+      throw new Error(`Skill "${args.skill_name}" not found. No skill groups found in build.`);
+    }
+    return {
+      index: args?.skill_index ?? 0,
+      skillName: "Unknown Skill",
+      reason: "no parseable skill groups; using service default skill index",
+    };
+  }
+
+  if (args?.skill_name?.trim()) {
+    const requested = args.skill_name.trim().toLowerCase();
+    const match = skills.find((skill) => skill.activeSkillName.toLowerCase() === requested);
+    if (!match) {
+      const available = skills.map((skill) => `${skill.index}: ${skill.activeSkillName}`).join(", ");
+      throw new Error(`Skill "${args.skill_name}" not found. Available skills: ${available}`);
+    }
+    return {
+      index: match.index,
+      skillName: match.activeSkillName,
+      reason: `matched skill_name="${args.skill_name.trim()}"`,
+    };
+  }
+
+  if (args?.skill_index !== undefined) {
+    if (!Number.isInteger(args.skill_index) || args.skill_index < 0 || args.skill_index >= skills.length) {
+      throw new Error(`skill_index ${args.skill_index} not found. Build has ${skills.length} skill group(s).`);
+    }
+    const selected = skills[args.skill_index];
+    return {
+      index: selected.index,
+      skillName: selected.activeSkillName,
+      reason: "explicit zero-based skill_index",
+    };
+  }
+
+  const selected =
+    skills.find((skill) => skill.isMain) ||
+    skills.find((skill) => skill.isInActiveSet && skill.isEnabled) ||
+    skills[0];
+
+  return {
+    index: selected.index,
+    skillName: selected.activeSkillName,
+    reason: selected.isMain
+      ? "defaulted to XML mainActiveSkill group"
+      : "defaulted to first enabled skill group",
+  };
+}
+
 /**
  * Handle analyze_skill_links tool call
  */
 export async function handleAnalyzeSkillLinks(
   context: SkillGemHandlerContext,
-  args?: { build_name?: string; skill_index?: number }
+  args?: { build_name?: string; skill_index?: number; skill_name?: string }
 ) {
   return wrapHandler('analyze skill links', async () => {
   const { buildService, skillGemService } = context;
@@ -462,7 +550,8 @@ export async function handleAnalyzeSkillLinks(
   }
 
   const buildData = await buildService.readBuild(args.build_name);
-  const skillIndex = args.skill_index || 0;
+  const selection = resolveSkillSelection(buildData, args);
+  const skillIndex = selection.index;
 
   const analysis = skillGemService.analyzeSkillLinks(buildData, skillIndex);
 
@@ -470,6 +559,7 @@ export async function handleAnalyzeSkillLinks(
   const outputLines: string[] = [
     `=== Skill Analysis: ${analysis.activeSkill.name} ===`,
     '',
+    `Selected Skill: ${selection.skillName} (index ${skillIndex}; ${selection.reason})`,
     `Active Skill: ${analysis.activeSkill.name} (Level ${analysis.activeSkill.level}/${analysis.activeSkill.quality})`,
     `Tags: ${analysis.activeSkill.tags.join(", ")}`,
     `Archetype: ${analysis.archetype}`,
@@ -536,6 +626,7 @@ export async function handleSuggestSupportGems(
   args?: {
     build_name?: string;
     skill_index?: number;
+    skill_name?: string;
     count?: number;
     include_exceptional?: boolean;
     budget?: "league_start" | "mid_league" | "endgame";
@@ -549,7 +640,8 @@ export async function handleSuggestSupportGems(
   }
 
   const buildData = await buildService.readBuild(args.build_name);
-  const skillIndex = args.skill_index || 0;
+  const selection = resolveSkillSelection(buildData, args);
+  const skillIndex = selection.index;
 
   const suggestions = skillGemService.suggestSupportGems(buildData, skillIndex, {
     count: args.count,
@@ -564,6 +656,7 @@ export async function handleSuggestSupportGems(
   const outputLines: string[] = [
     `=== Support Gem Recommendations for ${analysis.activeSkill.name} ===`,
     '',
+    `Selected Skill: ${selection.skillName} (index ${skillIndex}; ${selection.reason})`,
     LINK_MEASUREMENT_GUARDRAIL,
     '',
   ];
@@ -581,17 +674,28 @@ export async function handleSuggestSupportGems(
   }
 
   outputLines.push(`Top ${suggestions.length} Recommendations:`, '');
+  outputLines.push('Verification gates: DPS is heuristic unless marked measured; acquisition and price require current league checks.', '');
 
   for (let i = 0; i < suggestions.length; i++) {
     const suggestion = suggestions[i];
+    const measured = suggestion.measured ?? DEFAULT_HEURISTIC_GEM_MEASUREMENT;
+    const acquirable = suggestion.acquirable ?? DEFAULT_UNVERIFIED_GEM_ACQUISITION;
+    const priceChecked = suggestion.priceChecked === true;
+    const feasibilityNotes = suggestion.feasibilityNotes ?? [];
 
     outputLines.push(`${i + 1}. ${suggestion.gem}`);
     if (suggestion.replaces) {
       outputLines.push(`   Replaces: ${suggestion.replaces}`);
     }
     outputLines.push(`   Est. DPS Increase: +${suggestion.dpsIncrease.toFixed(1)}%`);
+    outputLines.push(`   Measured: ${measured}`);
+    outputLines.push(`   Acquirable: ${acquirable}`);
+    outputLines.push(`   Price-checked: ${priceChecked ? "yes" : "no"}`);
     outputLines.push(`   Why: ${suggestion.reasoning}`);
-    outputLines.push(`   Cost: ${suggestion.cost}`);
+    outputLines.push(`   Price: ${suggestion.cost}`);
+    for (const note of feasibilityNotes) {
+      outputLines.push(`   Note: ${note}`);
+    }
 
     if (suggestion.requires && suggestion.requires.length > 0) {
       outputLines.push(`   Requires: ${suggestion.requires.join(", ")}`);
@@ -636,6 +740,7 @@ export async function handleCompareGemSetups(
   args: {
     build_name: string;
     skill_index?: number;
+    skill_name?: string;
     setups: Array<{ name: string; gems: string[] }>;
   }
 ) {
@@ -652,12 +757,13 @@ export async function handleCompareGemSetups(
   const buildData = await buildService.readBuild(args.build_name);
 
   // Get active skill name for context
-  const skills = extractSkills(buildData);
-  const skillIndex = args.skill_index || 0;
-  const activeSkillName = skills[skillIndex]?.gems[0]?.nameSpec || "Unknown Skill";
+  const selection = resolveSkillSelection(buildData, args);
+  const activeSkillName = selection.skillName;
 
   const outputLines: string[] = [
     `=== Gem Setup Comparison for ${activeSkillName} ===`,
+    '',
+    `Selected Skill: ${activeSkillName} (index ${selection.index}; ${selection.reason})`,
     '',
     'NOTE: Live DPS simulation per-setup is not yet supported (gem-swap requires PoB API extension).',
     'Showing structural analysis of each setup.',
@@ -794,6 +900,8 @@ export async function handleValidateGemQuality(
       const upgrade = validation.exceptionalUpgrades[i];
       outputLines.push(`${i + 1}. ${upgrade.gem} → ${upgrade.exceptional}`);
       outputLines.push(`   Est. DPS Gain: ${upgrade.dpsGain}`);
+      outputLines.push(`   Acquirable: ${upgrade.acquirable}`);
+      outputLines.push(`   Price-checked: ${upgrade.priceChecked ? "yes" : "no"}`);
     }
     outputLines.push('');
   }
@@ -803,6 +911,7 @@ export async function handleValidateGemQuality(
     for (let i = 0; i < validation.corruptionTargets.length; i++) {
       const target = validation.corruptionTargets[i];
       outputLines.push(`${i + 1}. ${target.gem} (current) → ${target.target} (corrupted)`);
+      outputLines.push(`   Cap: ${target.cap}`);
       outputLines.push(`   Risk: ${target.risk}`);
     }
     outputLines.push('');
@@ -976,6 +1085,7 @@ export async function handleFindOptimalLinks(
   args: {
     build_name: string;
     skill_index?: number;
+    skill_name?: string;
     link_count: number;
     budget?: "league_start" | "mid_league" | "endgame";
     optimize_for?: "dps" | "clear_speed" | "bossing" | "defense";
@@ -992,7 +1102,8 @@ export async function handleFindOptimalLinks(
   }
 
   const buildData = await buildService.readBuild(args.build_name);
-  const skillIndex = args.skill_index || 0;
+  const selection = resolveSkillSelection(buildData, args);
+  const skillIndex = selection.index;
 
   const analysis = skillGemService.analyzeSkillLinks(buildData, skillIndex);
   const suggestions = skillGemService.suggestSupportGems(buildData, skillIndex, {
@@ -1008,6 +1119,7 @@ export async function handleFindOptimalLinks(
   const outputLines: string[] = [
     `=== Optimal ${args.link_count}-Link for ${analysis.activeSkill.name} ===`,
     '',
+    `Selected Skill: ${selection.skillName} (index ${skillIndex}; ${selection.reason})`,
     `Optimization Target: ${optimizeFor.toUpperCase()}`,
     `Budget: ${budget.replace("_", " ").replace(/\b\w/g, (l) => l.toUpperCase())}`,
     '',
@@ -1024,6 +1136,10 @@ export async function handleFindOptimalLinks(
   let cumulativeDPS = 0;
   for (let i = 0; i < Math.min(suggestions.length, args.link_count - 1); i++) {
     const suggestion = suggestions[i];
+    const measured = suggestion.measured ?? DEFAULT_HEURISTIC_GEM_MEASUREMENT;
+    const acquirable = suggestion.acquirable ?? DEFAULT_UNVERIFIED_GEM_ACQUISITION;
+    const priceChecked = suggestion.priceChecked === true;
+    const feasibilityNotes = suggestion.feasibilityNotes ?? [];
     cumulativeDPS += suggestion.dpsIncrease;
 
     let stepLine = `Step ${i + 1}: Add ${suggestion.gem}`;
@@ -1031,13 +1147,19 @@ export async function handleFindOptimalLinks(
       stepLine += ` (replace ${suggestion.replaces})`;
     }
     outputLines.push(stepLine);
-    outputLines.push(`Cost: ${suggestion.cost}`);
+    outputLines.push(`Measured: ${measured}`);
+    outputLines.push(`Acquirable: ${acquirable}`);
+    outputLines.push(`Price-checked: ${priceChecked ? "yes" : "no"}`);
+    outputLines.push(`Price: ${suggestion.cost}`);
     outputLines.push(`Est. DPS Increase: +${suggestion.dpsIncrease.toFixed(1)}%`);
+    for (const note of feasibilityNotes) {
+      outputLines.push(`Note: ${note}`);
+    }
     outputLines.push('');
   }
 
   outputLines.push('=== Summary ===');
-  outputLines.push(`Total Est. DPS Increase: +${cumulativeDPS.toFixed(1)}%`);
+  outputLines.push(`Total Heuristic DPS Increase: +${cumulativeDPS.toFixed(1)}%`);
 
   if (budget === "league_start") {
     outputLines.push('', '💡 League start setup focuses on easily obtainable gems');
@@ -1089,7 +1211,10 @@ export async function handleGemUpgradePath(
     currentQuality: number;
     action: string;
     priority: number;
-    costEstimate: string;
+    priceStatus: string;
+    measured: string;
+    acquirable: string;
+    priceChecked: boolean;
     reason: string;
   }
 
@@ -1113,7 +1238,10 @@ export async function handleGemUpgradePath(
           currentQuality: quality,
           action: `Level to 20 (currently ${level})`,
           priority: (20 - level) * multiplier * (isSupport ? 0.8 : 1.2),
-          costEstimate: 'Free (just level it)',
+          priceStatus: 'self-progression; no market price checked',
+          measured: 'heuristic priority only (not live PoB DPS)',
+          acquirable: 'self-leveling available if the gem can gain experience',
+          priceChecked: false,
           reason: 'Every gem level increases gem power — level gems in inactive weapon swap slots',
         });
       }
@@ -1129,8 +1257,11 @@ export async function handleGemUpgradePath(
             currentQuality: quality,
             action: `Bring to 20% quality (currently ${quality}%)`,
             priority: (20 - quality) * multiplier * (isSupport ? 0.6 : 0.9),
-            costEstimate: `~${costChaos}c in Gemcutter's Prisms`,
-            reason: 'Quality bonuses stack with gem level — use Hillock crafting bench for +28% quality',
+            priceStatus: "not price-checked; verify current Gemcutter's Prism prices",
+            measured: 'heuristic priority only (not live PoB DPS)',
+            acquirable: 'currency action, not a guaranteed market purchase',
+            priceChecked: false,
+            reason: 'Quality bonuses can improve gem effects; verify current quality mechanics before spending',
           });
         }
       }
@@ -1144,8 +1275,11 @@ export async function handleGemUpgradePath(
           currentQuality: quality,
           action: 'Corrupt for 21/20 (Vaal Orb on 20/20)',
           priority: 15 * multiplier,
-          costEstimate: '25% chance of 21/20, 25% chance brick — buy pre-corrupted 21/20 for safety',
-          reason: 'Level 21 is a significant DPS increase for active gems; corruption is high-risk/reward',
+          priceStatus: 'not price-checked; corruption can add at most +1 level or +3 quality',
+          measured: 'heuristic priority only (not live PoB DPS)',
+          acquirable: 'corruption outcome, not guaranteed',
+          priceChecked: false,
+          reason: 'Level 21 can be valuable for active gems; verify current price before buying a corrupted gem',
         });
       }
 
@@ -1156,10 +1290,13 @@ export async function handleGemUpgradePath(
           groupLabel: group.label || `Group ${group.index}`,
           currentLevel: level,
           currentQuality: quality,
-          action: `Buy Exceptional ${name.replace(' Support', '')} Support`,
+          action: `Check Exceptional ${name.replace(' Support', '')} Support`,
           priority: 20,
-          costEstimate: 'Varies greatly — check poe.ninja prices',
-          reason: 'Exceptional supports have higher quality bonuses and occasionally better base effects',
+          priceStatus: 'not price-checked; verify current league trade availability before buying',
+          measured: 'heuristic priority only (not live PoB DPS)',
+          acquirable: 'unverified in requested league',
+          priceChecked: false,
+          reason: 'Exceptional support availability is version-sensitive; PoB calc support is not proof of acquisition',
         });
       }
     }
@@ -1178,7 +1315,10 @@ export async function handleGemUpgradePath(
   for (const u of upgrades.slice(0, 15)) {
     outputLines.push(`**${rank}. ${u.gemName}** (${u.groupLabel})`);
     outputLines.push(`   Action: ${u.action}`);
-    outputLines.push(`   Cost: ${u.costEstimate}`);
+    outputLines.push(`   Measured: ${u.measured}`);
+    outputLines.push(`   Acquirable: ${u.acquirable}`);
+    outputLines.push(`   Price-checked: ${u.priceChecked ? "yes" : "no"}`);
+    outputLines.push(`   Price/availability: ${u.priceStatus}`);
     outputLines.push(`   Why: ${u.reason}`);
     outputLines.push('');
     rank++;
@@ -1192,15 +1332,19 @@ export async function handleGemUpgradePath(
 /**
  * Helper: Extract skills from build
  */
-function extractSkills(build: any): Array<{ gems: any[]; slot: string }> {
-  const skills: Array<{ gems: any[]; slot: string }> = [];
+function extractSkills(build: any): ExtractedSkillGroup[] {
+  const skills: ExtractedSkillGroup[] = [];
 
   if (build.Skills?.SkillSet) {
     const skillSets = Array.isArray(build.Skills.SkillSet)
       ? build.Skills.SkillSet
       : [build.Skills.SkillSet];
+    const activeSkillSetId = String(build.Skills.activeSkillSet ?? skillSets[0]?.id ?? "1");
 
-    for (const skillSet of skillSets) {
+    for (let skillSetIndex = 0; skillSetIndex < skillSets.length; skillSetIndex++) {
+      const skillSet = skillSets[skillSetIndex];
+      const skillSetId = String(skillSet.id ?? skillSetIndex + 1);
+      const isInActiveSet = skillSetId === activeSkillSetId;
       if (skillSet.Skill) {
         const skillArray = Array.isArray(skillSet.Skill) ? skillSet.Skill : [skillSet.Skill];
 
@@ -1208,8 +1352,13 @@ function extractSkills(build: any): Array<{ gems: any[]; slot: string }> {
           if (skill.Gem) {
             const gems = Array.isArray(skill.Gem) ? skill.Gem : [skill.Gem];
             skills.push({
+              index: skills.length,
               gems,
               slot: skill.slot || "Unknown",
+              activeSkillName: gemName(gems[0]),
+              isMain: isInActiveSet && isTruthy(skill.mainActiveSkill),
+              isEnabled: !isFalsey(skill.enabled),
+              isInActiveSet,
             });
           }
         }

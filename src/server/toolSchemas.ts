@@ -1070,7 +1070,11 @@ export function getSkillGemToolSchemas(): any[] {
           },
           skill_index: {
             type: "number",
-            description: "Which skill to analyze (0 = main skill, default: 0)",
+            description: "Zero-based skill group index. If omitted, uses skill_name when provided, otherwise the XML mainActiveSkill group when detectable.",
+          },
+          skill_name: {
+            type: "string",
+            description: "Exact active skill gem name to analyze. Prefer this over skill_index when you know the target skill.",
           },
         },
         required: ["build_name"],
@@ -1078,7 +1082,7 @@ export function getSkillGemToolSchemas(): any[] {
     },
     {
       name: "suggest_support_gems",
-      description: "Get intelligent support gem recommendations based on build archetype. Provides ranked suggestions with DPS estimates, cost, and reasoning.",
+      description: "Get support gem recommendations based on build archetype. Labels each option with measured/acquirable/price-checked status: DPS values are heuristic unless explicitly measured, acquisition is unverified until checked in the current league, and prices are not live-checked by this tool.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1088,7 +1092,11 @@ export function getSkillGemToolSchemas(): any[] {
           },
           skill_index: {
             type: "number",
-            description: "Which skill to optimize (0 = main skill, default: 0)",
+            description: "Zero-based skill group index. If omitted, uses skill_name when provided, otherwise the XML mainActiveSkill group when detectable.",
+          },
+          skill_name: {
+            type: "string",
+            description: "Exact active skill gem name to optimize. Prefer this over skill_index when you know the target skill.",
           },
           count: {
             type: "number",
@@ -1118,7 +1126,11 @@ export function getSkillGemToolSchemas(): any[] {
           },
           skill_index: {
             type: "number",
-            description: "Which skill to test (default: 0)",
+            description: "Zero-based skill group index. If omitted, uses skill_name when provided, otherwise the XML mainActiveSkill group when detectable.",
+          },
+          skill_name: {
+            type: "string",
+            description: "Exact active skill gem name to test. Prefer this over skill_index when you know the target skill.",
           },
           setups: {
             type: "array",
@@ -1141,7 +1153,7 @@ export function getSkillGemToolSchemas(): any[] {
     },
     {
       name: "validate_gem_quality",
-      description: "Check all gems for quality and level improvements. Identifies missing quality with slot/group/gem context, labels quality impact as unmeasured until stat readback, and reports Exceptional upgrade opportunities and corruption targets.",
+      description: "Check all gems for quality and level improvements. Identifies missing quality with slot/group/gem context, labels quality impact as unmeasured until stat readback, separates acquisition and price checks for Exceptional upgrades, and reports corruption targets with the +1 level/+3% quality cap.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1198,7 +1210,7 @@ export function getSkillGemToolSchemas(): any[] {
     },
     {
       name: "find_optimal_links",
-      description: "Auto-generate the best support gem combination for a skill based on budget and optimization goal. Provides step-by-step upgrade path.",
+      description: "Auto-generate a support gem combination for a skill based on budget and optimization goal. Outputs heuristic DPS estimates plus measured/acquirable/price-checked labels; verify current-league acquisition and prices before buying.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1208,7 +1220,11 @@ export function getSkillGemToolSchemas(): any[] {
           },
           skill_index: {
             type: "number",
-            description: "Which skill to optimize (default: 0)",
+            description: "Zero-based skill group index. If omitted, uses skill_name when provided, otherwise the XML mainActiveSkill group when detectable.",
+          },
+          skill_name: {
+            type: "string",
+            description: "Exact active skill gem name to optimize. Prefer this over skill_index when you know the target skill.",
           },
           link_count: {
             type: "number",
@@ -1228,7 +1244,7 @@ export function getSkillGemToolSchemas(): any[] {
     },
     {
       name: "gem_upgrade_path",
-      description: "Generate a prioritized gem upgrade shopping list showing which gems to level, quality, and upgrade to Exceptional versions, ordered by impact and budget",
+      description: "Generate a prioritized gem upgrade checklist showing which gems to level, quality, corrupt, or check for Exceptional versions. Does not live-check prices or acquisition; Exceptional availability is version-sensitive and corruption can add at most +1 level or +3 quality.",
       inputSchema: {
         type: "object",
         properties: {
