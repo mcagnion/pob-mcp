@@ -38,6 +38,14 @@ export interface SkillGroupAnalysis {
   issues: SkillLinkIssue[];
   suggestions: string[];
   expectedDamageBoost?: string;
+  /**
+   * Measured supports that act like a "more" multiplier in the current link
+   * but are NOT already in MORE_MULTIPLIER_GEMS — i.e. genuine context-sensitive
+   * additions to multiplier coverage. Statically-classified supports are
+   * intentionally excluded so callers can sum this with `moreMultiplierCount`
+   * without double-counting.
+   */
+  measuredUnclassifiedMultiplierEquivalents?: MeasuredSupportContribution[];
 }
 
 export interface SkillOptimizationResult {
@@ -45,6 +53,38 @@ export interface SkillOptimizationResult {
   buildType: string;
   groupAnalyses: SkillGroupAnalysis[];
   generalSuggestions: string[];
+  measuredContext?: MeasuredSkillContext;
+}
+
+export interface MeasuredSupportContribution {
+  gemIndex: number;
+  name: string;
+  primaryField: string;
+  contributionPercent: number;
+}
+
+export interface MeasuredGemEntry {
+  gemIndex: number;
+  name: string;
+  isSupport: boolean;
+  primaryField?: string;
+  contributionPercent: number | null;
+  alreadyDisabled: boolean;
+  failed: boolean;
+  failureReason?: string;
+}
+
+export interface MeasuredSkillContext {
+  groupIndex: number;
+  primaryField?: string;
+  multiplierEquivalentThresholdPercent: number;
+  entries: MeasuredGemEntry[];
+  /**
+   * True when at least one gem in `entries` could not be measured (preview error,
+   * restore failure, or the loop aborted partway). Callers must NOT treat the
+   * remaining measured signals as an exhaustive ranking when this is true.
+   */
+  partial: boolean;
 }
 
 /**
@@ -285,11 +325,40 @@ function isSupportGem(gemName: string): boolean {
 }
 
 /**
+ * Returns measured supports that contribute >= threshold AND are NOT in
+ * MORE_MULTIPLIER_GEMS. Statically-classified supports are excluded so the
+ * caller can add this count to `moreMultiplierCount` without double-counting
+ * the same gem.
+ */
+function pickUnclassifiedMultiplierEquivalents(
+  group: SkillGroup,
+  measuredContext: MeasuredSkillContext | undefined,
+): MeasuredSupportContribution[] {
+  if (!measuredContext || measuredContext.groupIndex !== group.index) return [];
+  const threshold = measuredContext.multiplierEquivalentThresholdPercent;
+  const equivalents: MeasuredSupportContribution[] = [];
+  for (const entry of measuredContext.entries) {
+    if (!entry.isSupport || entry.failed || entry.alreadyDisabled) continue;
+    if (entry.contributionPercent == null || entry.primaryField == null) continue;
+    if (entry.contributionPercent < threshold) continue;
+    if (MORE_MULTIPLIER_GEMS.has(entry.name.toLowerCase())) continue;
+    equivalents.push({
+      gemIndex: entry.gemIndex,
+      name: entry.name,
+      primaryField: entry.primaryField,
+      contributionPercent: entry.contributionPercent,
+    });
+  }
+  return equivalents;
+}
+
+/**
  * Analyze a single skill group
  */
 function analyzeSkillGroup(
   group: SkillGroup,
-  buildArchetype: string
+  buildArchetype: string,
+  measuredContext?: MeasuredSkillContext,
 ): SkillGroupAnalysis {
   const analysis: SkillGroupAnalysis = {
     group,
@@ -342,23 +411,57 @@ function analyzeSkillGroup(
   const hasClearGem = supports.some((s) => CLEAR_SPEED_GEMS.has(s.name.toLowerCase()));
   const hasBossingGem = supports.some((s) => BOSSING_GEMS.has(s.name.toLowerCase()));
 
+  const unclassifiedEquivalents = pickUnclassifiedMultiplierEquivalents(group, measuredContext);
+  if (unclassifiedEquivalents.length > 0) {
+    analysis.measuredUnclassifiedMultiplierEquivalents = unclassifiedEquivalents;
+  }
+
   // Flag missing "more" multipliers on main skill — this is the #1 DPS lever in PoE
   if (group.isMainSkill && supports.length >= 2 && moreMultiplierCount === 0) {
-    analysis.issues.push({
-      type: 'no_more_multiplier',
-      severity: 'high',
-      message: 'No "more" damage multiplier supports on main skill',
-      suggestion:
-        'Add at least 1–2 "more" multipliers: Controlled Destruction, Elemental Focus, Spell Echo, Multistrike, Swift Affliction, Efficacy, Minion Damage, etc.',
-    });
+    if (unclassifiedEquivalents.length > 0) {
+      // Static says zero "more" multipliers, but measurement found context-sensitive
+      // contributors. Downgrade so the user sees both signals instead of acting on the
+      // static one alone.
+      analysis.issues.push({
+        type: 'no_more_multiplier',
+        severity: 'low',
+        message:
+          `Static classifier flagged 0 "more" multipliers, but measurement shows ${unclassifiedEquivalents.length} support(s) contributing >=` +
+          `${measuredContext!.multiplierEquivalentThresholdPercent}% of ${measuredContext!.primaryField ?? 'primary DPS'} on disable: ` +
+          unclassifiedEquivalents.map((m) => `${m.name} (${m.contributionPercent.toFixed(1)}%)`).join(', '),
+        suggestion:
+          'Treat these as context-sensitive multiplier-equivalents (their multiplier likely activates from another support, the active skill, or build mechanics). Verify measured contribution before swapping.',
+      });
+    } else {
+      analysis.issues.push({
+        type: 'no_more_multiplier',
+        severity: 'high',
+        message: 'No "more" damage multiplier supports on main skill',
+        suggestion:
+          'Add at least 1-2 "more" multipliers: Controlled Destruction, Elemental Focus, Spell Echo, Multistrike, Swift Affliction, Efficacy, Minion Damage, etc.',
+      });
+    }
   } else if (group.isMainSkill && analysis.linkCount >= 5 && moreMultiplierCount < 2) {
-    analysis.issues.push({
-      type: 'no_more_multiplier',
-      severity: 'medium',
-      message: `Only ${moreMultiplierCount} "more" multiplier support on a ${analysis.linkCount}-link`,
-      suggestion:
-        `A ${analysis.linkCount}-link can support 2–3 "more" multiplier supports. Each one multiplicatively scales total damage.`,
-    });
+    const totalMultiplierLike = moreMultiplierCount + unclassifiedEquivalents.length;
+    if (totalMultiplierLike >= 2 && unclassifiedEquivalents.length > 0) {
+      analysis.issues.push({
+        type: 'no_more_multiplier',
+        severity: 'low',
+        message:
+          `Static classifier counted ${moreMultiplierCount} "more" multiplier(s) on a ${analysis.linkCount}-link, but measurement adds ${unclassifiedEquivalents.length} context-sensitive contributor(s): ` +
+          unclassifiedEquivalents.map((m) => `${m.name} (${m.contributionPercent.toFixed(1)}%)`).join(', '),
+        suggestion:
+          'Total static + measured multiplier-equivalents already covers this link. Verify measured contribution before swapping any of these for a static multiplier.',
+      });
+    } else {
+      analysis.issues.push({
+        type: 'no_more_multiplier',
+        severity: 'medium',
+        message: `Only ${moreMultiplierCount} "more" multiplier support on a ${analysis.linkCount}-link`,
+        suggestion:
+          `A ${analysis.linkCount}-link can support 2-3 "more" multiplier supports. Each one multiplicatively scales total damage.`,
+      });
+    }
   }
 
   // Flag no penetration for elemental builds (critical vs endgame bosses with 40%+ resists)
@@ -484,7 +587,8 @@ function analyzeSkillGroup(
  */
 export function analyzeSkillSetup(
   groups: SkillGroup[],
-  buildArchetype: string
+  buildArchetype: string,
+  measuredContext?: MeasuredSkillContext,
 ): SkillOptimizationResult {
   const groupAnalyses: SkillGroupAnalysis[] = [];
   const generalSuggestions: string[] = [];
@@ -493,7 +597,7 @@ export function analyzeSkillSetup(
     if (group.gems.length === 0 && !group.isMainSkill) {
       continue; // Skip empty non-main groups
     }
-    const analysis = analyzeSkillGroup(group, buildArchetype);
+    const analysis = analyzeSkillGroup(group, buildArchetype, measuredContext);
     groupAnalyses.push(analysis);
   }
 
@@ -507,11 +611,24 @@ export function analyzeSkillSetup(
         `Main skill has ${mainSkill.linkCount} links — upgrade to 6-link for maximum damage output`
       );
     }
-    if (mainSkill.moreMultiplierCount < 2) {
+    const unclassifiedEquivalentCount = mainSkill.measuredUnclassifiedMultiplierEquivalents?.length ?? 0;
+    if (mainSkill.moreMultiplierCount < 2 && unclassifiedEquivalentCount === 0) {
       generalSuggestions.push(
         `Main skill has only ${mainSkill.moreMultiplierCount} "more" multiplier support(s). ` +
         `"More" multipliers (Controlled Destruction, Elemental Focus, Multistrike, etc.) are multiplicative — ` +
         `a second "more" multiplier at ×1.4 added to an existing ×1.4 gives ×1.96 total, which is far stronger than any "increased" node.`
+      );
+    } else if (mainSkill.moreMultiplierCount + unclassifiedEquivalentCount < 2 && unclassifiedEquivalentCount > 0) {
+      generalSuggestions.push(
+        `Main skill has ${mainSkill.moreMultiplierCount} statically-classified "more" multiplier(s) plus ${unclassifiedEquivalentCount} measured context-sensitive equivalent(s). ` +
+        `Total measured-or-static multiplier coverage: ${mainSkill.moreMultiplierCount + unclassifiedEquivalentCount}. ` +
+        `Consider adding another "more" multiplier; verify the measured equivalents stay above the threshold before swapping any of them.`
+      );
+    } else if (mainSkill.moreMultiplierCount < 2 && unclassifiedEquivalentCount > 0) {
+      generalSuggestions.push(
+        `Main skill has ${mainSkill.moreMultiplierCount} statically-classified "more" multiplier(s) plus ${unclassifiedEquivalentCount} measured context-sensitive equivalent(s). ` +
+        `Total measured-or-static multiplier coverage: ${mainSkill.moreMultiplierCount + unclassifiedEquivalentCount}. ` +
+        `Verify the measured equivalents stay above the threshold before swapping any of them for a static multiplier.`
       );
     }
     if (!mainSkill.hasPenetration) {
@@ -542,6 +659,7 @@ export function analyzeSkillSetup(
     buildType: buildArchetype,
     groupAnalyses,
     generalSuggestions,
+    measuredContext,
   };
 }
 
@@ -553,6 +671,29 @@ export function formatSkillOptimization(result: SkillOptimizationResult): string
 
   output += `Build Type: ${result.buildType}\n`;
   output += `${result.summary}\n\n`;
+
+  if (result.measuredContext) {
+    output += '=== Measured Link Contributions ===\n';
+    const ctx = result.measuredContext;
+    output += `Group: ${ctx.groupIndex} | Primary DPS field: ${ctx.primaryField ?? 'unavailable'} | Multiplier-equivalent threshold: ${ctx.multiplierEquivalentThresholdPercent}%\n`;
+    if (ctx.entries.length === 0) {
+      output += 'No gems measured.\n\n';
+    } else {
+      for (const entry of ctx.entries) {
+        if (entry.failed) {
+          output += `- ${entry.name} (gem_index=${entry.gemIndex}): measurement failed (${entry.failureReason ?? 'unknown'})\n`;
+        } else if (entry.alreadyDisabled) {
+          output += `- ${entry.name} (gem_index=${entry.gemIndex}): already disabled (no current contribution)\n`;
+        } else if (entry.contributionPercent == null) {
+          output += `- ${entry.name} (gem_index=${entry.gemIndex}): no modeled DPS-field loss\n`;
+        } else {
+          const tag = entry.isSupport ? 'support' : 'active';
+          output += `- ${entry.name} (gem_index=${entry.gemIndex}, ${tag}): ${entry.contributionPercent.toFixed(1)}% of ${entry.primaryField ?? 'primary'} on disable\n`;
+        }
+      }
+      output += '\n';
+    }
+  }
 
   // General suggestions
   if (result.generalSuggestions.length > 0) {

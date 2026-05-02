@@ -9,9 +9,17 @@ import {
 import {
   analyzeSkillSetup,
   formatSkillOptimization,
+  type MeasuredGemEntry,
+  type MeasuredSkillContext,
   type SkillGroup,
 } from "../skillLinkOptimizer.js";
 import { sanitizeBuildName } from "../utils/pathSanitizer.js";
+import {
+  findSkillGroup,
+  gemIdentity,
+  groupGemList,
+  measureGemDisable,
+} from "./skillGemHandlers.js";
 
 export interface AdvancedOptimizationContext {
   buildService: BuildService;
@@ -22,6 +30,125 @@ export interface AdvancedOptimizationContext {
 
 const LINK_MEASUREMENT_GUARDRAIL =
   'Guardrail: before replacing supports, run measure_link_contributions on the loaded build; estimates here are structural and not a measured DPS ranking.';
+const MEASURED_LINK_NOTICE =
+  'Measured link contributions were folded into this analysis; static "no more multipliers" warnings have been downgraded where measurement contradicts.';
+const MEASURED_LINK_PARTIAL_NOTICE =
+  'Measured link contributions were partial: at least one gem failed to measure or the measurement loop aborted on a restore failure. Treat the measured signals below as incomplete and rerun measure_link_contributions before replacing supports.';
+const MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT = 10;
+
+async function buildMeasuredSkillContext(
+  luaClient: PoBLuaApiClient | null,
+  buildName: string | undefined,
+  groupIndex?: number,
+): Promise<{ context?: MeasuredSkillContext; reason?: string }> {
+  if (!luaClient || !luaClient.isAlive()) {
+    return { reason: 'Lua bridge unavailable' };
+  }
+  let info: any;
+  try {
+    info = await luaClient.getBuildInfo();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return { reason: `could not read loaded build info (${msg})` };
+  }
+  if (buildName) {
+    const loaded = String(info?.name ?? '').replace(/\.xml$/i, '').trim().toLowerCase();
+    const requested = buildName.replace(/\.xml$/i, '').trim().toLowerCase();
+    if (loaded && requested && loaded !== requested) {
+      return { reason: `Lua bridge has "${info?.name ?? loaded}" loaded, not "${buildName}"` };
+    }
+  }
+
+  let skills: any;
+  try {
+    skills = await luaClient.getSkills();
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    return { reason: `could not read loaded skill gems (${msg})` };
+  }
+
+  const group = findSkillGroup(skills, groupIndex);
+  if (!group) {
+    return { reason: groupIndex ? `socket group ${groupIndex} not found` : 'main socket group not found' };
+  }
+
+  const gems = groupGemList(group);
+  const entries: MeasuredGemEntry[] = [];
+  let primaryField: string | undefined;
+  let partial = false;
+
+  for (let index = 0; index < gems.length; index++) {
+    const identity = gemIdentity(group, gems[index], index + 1);
+    const measurement = await measureGemDisable(luaClient, identity);
+
+    if (measurement.alreadyDisabled) {
+      entries.push({
+        gemIndex: identity.gemIndex,
+        name: identity.name,
+        isSupport: identity.isSupport,
+        primaryField: undefined,
+        contributionPercent: 0,
+        alreadyDisabled: true,
+        failed: false,
+      });
+      continue;
+    }
+    if (measurement.error) {
+      entries.push({
+        gemIndex: identity.gemIndex,
+        name: identity.name,
+        isSupport: identity.isSupport,
+        primaryField: undefined,
+        contributionPercent: null,
+        alreadyDisabled: false,
+        failed: true,
+        failureReason: measurement.error,
+      });
+      partial = true;
+      // A non-restored failure means subsequent measurements are unreliable; bail.
+      if (/restore/i.test(measurement.error)) {
+        // Mark every remaining gem as un-measured so callers can see the loop aborted.
+        for (let remaining = index + 1; remaining < gems.length; remaining++) {
+          const skipped = gemIdentity(group, gems[remaining], remaining + 1);
+          entries.push({
+            gemIndex: skipped.gemIndex,
+            name: skipped.name,
+            isSupport: skipped.isSupport,
+            primaryField: undefined,
+            contributionPercent: null,
+            alreadyDisabled: false,
+            failed: true,
+            failureReason: 'skipped after prior restore failure',
+          });
+        }
+        break;
+      }
+      continue;
+    }
+
+    if (!primaryField && measurement.primaryField) primaryField = measurement.primaryField;
+
+    entries.push({
+      gemIndex: identity.gemIndex,
+      name: identity.name,
+      isSupport: identity.isSupport,
+      primaryField: measurement.primaryField,
+      contributionPercent: measurement.contributionPercent,
+      alreadyDisabled: false,
+      failed: false,
+    });
+  }
+
+  return {
+    context: {
+      groupIndex: Number(group?.index),
+      primaryField,
+      multiplierEquivalentThresholdPercent: MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT,
+      entries,
+      partial,
+    },
+  };
+}
 
 /**
  * Analyze equipped items and suggest upgrades
@@ -162,7 +289,8 @@ export async function handleAnalyzeItems(
  */
 export async function handleOptimizeSkillLinks(
   context: AdvancedOptimizationContext,
-  buildName?: string
+  buildName?: string,
+  options?: { measure?: boolean }
 ) {
   try {
     let skillGroups: SkillGroup[] = [];
@@ -172,13 +300,25 @@ export async function handleOptimizeSkillLinks(
     const luaClient = context.getLuaClient();
 
     if (luaClient) {
-      // Load build if buildName provided
+      // Only load if the requested build differs from the one already loaded —
+      // preserves any select_spec/select_item_set state and avoids mutating the
+      // Lua build when measurement (AC4) or the static path could just read it.
       if (buildName) {
         const fs2 = await import('fs/promises');
-        const path2 = await import('path');
-        const buildPath = path2.join(context.pobDirectory, buildName);
-        const xml = await fs2.readFile(buildPath, 'utf-8');
-        await luaClient.loadBuildXml(xml, buildName);
+        let needsLoad = true;
+        try {
+          const info = await luaClient.getBuildInfo();
+          const loaded = (info?.name ?? '').replace(/\.xml$/i, '');
+          const requested = buildName.replace(/\.xml$/i, '');
+          if (loaded && (loaded === requested || loaded.split(/[/\\]/).pop() === requested.split(/[/\\]/).pop())) {
+            needsLoad = false;
+          }
+        } catch { /* no build loaded yet */ }
+        if (needsLoad) {
+          const buildPath = sanitizeBuildName(buildName, context.pobDirectory);
+          const xml = await fs2.readFile(buildPath, 'utf-8');
+          await luaClient.loadBuildXml(xml, buildName);
+        }
       }
 
       try {
@@ -262,10 +402,29 @@ export async function handleOptimizeSkillLinks(
       };
     }
 
+    let measuredContext: MeasuredSkillContext | undefined;
+    let measurementReason: string | undefined;
+    if (options?.measure) {
+      const mainGroupIndex = skillGroups.find((g) => g.isMainSkill)?.index;
+      const result = await buildMeasuredSkillContext(luaClient, buildName, mainGroupIndex);
+      measuredContext = result.context;
+      measurementReason = result.reason;
+    }
+
     // Analyze skill setup
-    const optimization = analyzeSkillSetup(skillGroups, buildArchetype);
+    const optimization = analyzeSkillSetup(skillGroups, buildArchetype, measuredContext);
     const formatted = formatSkillOptimization(optimization);
-    const text = `${formatted}\n${LINK_MEASUREMENT_GUARDRAIL}`;
+    let trailingNotice: string;
+    if (measuredContext && measuredContext.partial) {
+      trailingNotice = `${MEASURED_LINK_PARTIAL_NOTICE}\n${LINK_MEASUREMENT_GUARDRAIL}`;
+    } else if (measuredContext) {
+      trailingNotice = MEASURED_LINK_NOTICE;
+    } else if (options?.measure) {
+      trailingNotice = `Measurement requested but unavailable: ${measurementReason ?? 'unknown reason'}. Falling back to static analysis.\n${LINK_MEASUREMENT_GUARDRAIL}`;
+    } else {
+      trailingNotice = LINK_MEASUREMENT_GUARDRAIL;
+    }
+    const text = `${formatted}\n${trailingNotice}`;
 
     return {
       content: [

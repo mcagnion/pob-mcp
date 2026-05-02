@@ -455,7 +455,8 @@ export async function routeToolCall(
       const skillLinkContext = deps.contextBuilder.buildAdvancedOptimizationContext();
       return await handleOptimizeSkillLinks(
         skillLinkContext,
-        args?.build_name as string | undefined
+        args?.build_name as string | undefined,
+        { measure: args?.measure === true }
       );
 
     case "create_budget_build":

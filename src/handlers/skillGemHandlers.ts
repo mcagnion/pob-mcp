@@ -72,7 +72,7 @@ interface GemQualityMeasurement {
   error?: string;
 }
 
-interface GemIdentity {
+export interface GemIdentity {
   groupIndex: number;
   groupLabel: string;
   slot: string;
@@ -84,7 +84,7 @@ interface GemIdentity {
   isSupport: boolean;
 }
 
-interface GemContributionMeasurement extends GemIdentity {
+export interface GemContributionMeasurement extends GemIdentity {
   restored: boolean;
   before: Record<string, any>;
   after: Record<string, any>;
@@ -275,7 +275,7 @@ function primaryContribution(
   return null;
 }
 
-function groupGemList(group: any): any[] {
+export function groupGemList(group: any): any[] {
   if (Array.isArray(group?.gems) && group.gems.length > 0) {
     return group.gems;
   }
@@ -290,7 +290,7 @@ function groupGemList(group: any): any[] {
   return [];
 }
 
-function gemIdentity(group: any, gem: any, fallbackIndex: number): GemIdentity {
+export function gemIdentity(group: any, gem: any, fallbackIndex: number): GemIdentity {
   const gemIndex = Number(gem?.index ?? fallbackIndex);
   return {
     groupIndex: Number(group?.index),
@@ -305,7 +305,7 @@ function gemIdentity(group: any, gem: any, fallbackIndex: number): GemIdentity {
   };
 }
 
-function findSkillGroup(skills: any, groupIndex?: number): any | null {
+export function findSkillGroup(skills: any, groupIndex?: number): any | null {
   const groups = Array.isArray(skills?.groups) ? skills.groups : [];
   if (groups.length === 0) return null;
   const targetIndex = groupIndex ?? Number(skills?.mainSocketGroup ?? groups[0]?.index);
@@ -324,7 +324,7 @@ function findGemInGroup(group: any, gemIndex: number): { gem: any; fallbackIndex
   return null;
 }
 
-async function getLiveGemContext(
+export async function getLiveGemContext(
   context: SkillGemHandlerContext,
   buildName: string | undefined,
   rerunToolName: string
@@ -376,7 +376,7 @@ async function getLiveGemContext(
   }
 }
 
-async function measureGemDisable(
+export async function measureGemDisable(
   luaClient: PoBLuaApiClient,
   identity: GemIdentity
 ): Promise<GemContributionMeasurement> {
