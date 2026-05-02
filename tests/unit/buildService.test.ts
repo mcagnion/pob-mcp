@@ -192,10 +192,15 @@ describe('BuildService', () => {
       const build = {
         Build: { className: 'Ranger' },
         Items: {
+          Item: [
+            { id: '1', '#text': 'Rarity: Rare\nDeath Bow\nThicket Bow' },
+            { id: '2', '#text': 'Rarity: Unique\nKaom\'s Heart\nGlorious Plate' },
+          ],
           ItemSet: {
+            id: '1',
             Slot: [
-              { name: 'Weapon 1', Item: 'Rarity: Rare\nDeath Bow\nThicket Bow' },
-              { name: 'Body Armour', Item: 'Rarity: Unique\nKaom\'s Heart\nGlorious Plate' },
+              { name: 'Weapon 1', itemId: '1' },
+              { name: 'Body Armour', itemId: '2' },
             ],
           },
         },
@@ -256,7 +261,7 @@ describe('BuildService', () => {
     it('should return active spec from array', () => {
       const build = {
         Tree: {
-          activeSpec: '1', // 1-indexed
+          activeSpec: '2', // 1-indexed; '2' selects the second entry
           Spec: [
             { nodes: '1,2,3', treeVersion: '3_26' },
             { nodes: '4,5,6', treeVersion: '3_26' },

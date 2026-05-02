@@ -401,8 +401,10 @@ describe('TreeService', () => {
       const allocatedNodes = new Set(['1', '2']);
       const result = treeService.findShortestPaths(allocatedNodes, '2', treeData, 1);
 
-      // When target is already allocated, algorithm returns empty array (no path needed)
-      expect(result).toHaveLength(0);
+      // Target already allocated: returns a single zero-cost no-op path.
+      expect(result).toHaveLength(1);
+      expect(result[0].nodes).toEqual([]);
+      expect(result[0].cost).toBe(0);
     });
   });
 });
