@@ -893,13 +893,17 @@ export function getOptimizationToolSchemas(): any[] {
     },
     {
       name: "optimize_skill_links",
-      description: "Analyze skill gem setups for 'more' multipliers, penetration, and support gem synergies. Flags missing multiplicative damage supports and suggests clear-speed vs bossing balance.",
+      description: "Analyze skill gem setups for 'more' multipliers, penetration, and support gem synergies. Flags missing multiplicative damage supports and suggests clear-speed vs bossing balance. Pass measure=true to fold measure_link_contributions data into the analysis so static 'no more multipliers' warnings are suppressed when measurement contradicts (slower; runs N disable/restore previews on the loaded build's main socket group).",
       inputSchema: {
         type: "object",
         properties: {
           build_name: {
             type: "string",
             description: "Build to analyze",
+          },
+          measure: {
+            type: "boolean",
+            description: "Opt-in: when true and the Lua bridge has the requested build loaded, run measure_link_contributions on the main socket group and use measured per-gem contribution to qualify static support-gem warnings. Default false (purely static).",
           },
         },
         required: ["build_name"],
