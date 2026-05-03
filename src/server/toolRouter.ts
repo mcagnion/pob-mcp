@@ -534,6 +534,7 @@ export async function routeToolCall(
       return await handleCompareGemSetups(skillGemContext, {
         build_name: args.build_name as string,
         skill_index: args.skill_index as number | undefined,
+        skill_name: args.skill_name as string | undefined,
         setups: args.setups as Array<{ name: string; gems: string[] }>,
       });
 
@@ -551,6 +552,7 @@ export async function routeToolCall(
       return await handleFindOptimalLinks(skillGemContext, {
         build_name: args.build_name as string,
         skill_index: args.skill_index as number | undefined,
+        skill_name: args.skill_name as string | undefined,
         link_count: args.link_count as number,
         budget: args.budget as "league_start" | "mid_league" | "endgame" | undefined,
         optimize_for: args.optimize_for as "dps" | "clear_speed" | "bossing" | "defense" | undefined,
