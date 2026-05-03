@@ -1086,7 +1086,7 @@ export function getSkillGemToolSchemas(): any[] {
     },
     {
       name: "suggest_support_gems",
-      description: "Get support gem recommendations based on build archetype. Labels each option with measured/acquirable/price-checked status: DPS values are heuristic unless explicitly measured, acquisition is unverified until checked in the current league, and prices are not live-checked by this tool.",
+      description: "Get support gem recommendations based on build archetype. Labels each option with measured/acquirable/price-checked status: DPS values are heuristic unless explicitly measured, acquisition is unverified until checked in the current league, and prices are not live-checked by this tool. Pass measure=true to disable each gem in the selected socket group via the Lua bridge and annotate each 'Replaces:' line with the gem's measured contribution; gems contributing at or above 10% of the primary DPS field are flagged as risky to replace (slower; runs N disable/restore previews on the loaded build).",
       inputSchema: {
         type: "object",
         properties: {
@@ -1113,6 +1113,10 @@ export function getSkillGemToolSchemas(): any[] {
           budget: {
             type: "string",
             description: "Budget tier: 'league_start', 'mid_league', or 'endgame' (default: 'endgame')",
+          },
+          measure: {
+            type: "boolean",
+            description: "Opt-in: when true and the Lua bridge has the requested build loaded, disable each gem in the selected socket group and annotate every 'Replaces:' recommendation with the replaced gem's measured contribution. Default false (purely static).",
           },
         },
         required: ["build_name"],
