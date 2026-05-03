@@ -2,6 +2,13 @@ import type { BuildService } from "../services/buildService.js";
 import type { SkillGemService } from "../services/skillGemService.js";
 import type { PoBLuaApiClient } from "../pobLuaBridge.js";
 import { wrapHandler } from "../utils/errorHandling.js";
+import {
+  buildMeasuredSkillContext,
+  MEASURED_LINK_NOTICE,
+  MEASURED_LINK_PARTIAL_NOTICE,
+  MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT,
+} from "./advancedOptimizationHandlers.js";
+import type { MeasuredGemEntry } from "../skillLinkOptimizer.js";
 
 export interface SkillGemHandlerContext {
   buildService: BuildService;
@@ -635,6 +642,7 @@ export async function handleSuggestSupportGems(
     count?: number;
     include_exceptional?: boolean;
     budget?: "league_start" | "mid_league" | "endgame";
+    measure?: boolean;
   }
 ) {
   return wrapHandler('suggest support gems', async () => {
@@ -657,6 +665,29 @@ export async function handleSuggestSupportGems(
   // Get current analysis for context
   const analysis = skillGemService.analyzeSkillLinks(buildData, skillIndex);
 
+  // Optional measurement pass: when args.measure is true, ask the Lua bridge
+  // to disable each gem in the selected socket group one at a time so we can
+  // annotate every static "Replaces:" recommendation with the gem's actual
+  // measured contribution. The selection.index → group_index mapping mirrors
+  // gemLocation() in skillGemService so a non-measured tool still points at
+  // the same slot.
+  let measuredEntries: Map<string, MeasuredGemEntry> | undefined;
+  let measurementPartial = false;
+  let measurementUnavailableReason: string | undefined;
+  if (args.measure) {
+    const luaClient = context.getLuaClient?.() ?? null;
+    const measured = await buildMeasuredSkillContext(luaClient, args.build_name, skillIndex + 1);
+    if (measured.context) {
+      measuredEntries = new Map();
+      for (const entry of measured.context.entries) {
+        measuredEntries.set(entry.name.toLowerCase(), entry);
+      }
+      measurementPartial = measured.context.partial;
+    } else {
+      measurementUnavailableReason = measured.reason ?? 'unknown reason';
+    }
+  }
+
   // Format output
   const outputLines: string[] = [
     `=== Support Gem Recommendations for ${analysis.activeSkill.name} ===`,
@@ -668,6 +699,7 @@ export async function handleSuggestSupportGems(
 
   if (suggestions.length === 0) {
     outputLines.push('No recommendations found. Your current setup appears optimal!');
+    appendSuggestSupportTrailingNotice(outputLines, args.measure === true, measuredEntries !== undefined, measurementPartial, measurementUnavailableReason);
     return {
       content: [
         {
@@ -690,7 +722,7 @@ export async function handleSuggestSupportGems(
 
     outputLines.push(`${i + 1}. ${suggestion.gem}`);
     if (suggestion.replaces) {
-      outputLines.push(`   Replaces: ${suggestion.replaces}`);
+      outputLines.push(`   Replaces: ${suggestion.replaces}${replacesAnnotation(suggestion.replaces, measuredEntries)}`);
     }
     outputLines.push(`   Est. DPS Increase: +${suggestion.dpsIncrease.toFixed(1)}%`);
     outputLines.push(`   Measured: ${measured}`);
@@ -724,6 +756,8 @@ export async function handleSuggestSupportGems(
   if (bestEndgame) {
     outputLines.push(`💡 ${budget === "endgame" ? "Endgame" : "Best"} Priority: ${bestEndgame.gem} (+${bestEndgame.dpsIncrease.toFixed(1)}%)`);
   }
+
+  appendSuggestSupportTrailingNotice(outputLines, args.measure === true, measuredEntries !== undefined, measurementPartial, measurementUnavailableReason);
   const output = outputLines.join('\n');
 
   return {
@@ -735,6 +769,53 @@ export async function handleSuggestSupportGems(
     ],
   };
   });
+}
+
+function replacesAnnotation(
+  replacedName: string,
+  measuredEntries: Map<string, MeasuredGemEntry> | undefined,
+): string {
+  if (!measuredEntries) return '';
+  const entry = measuredEntries.get(replacedName.toLowerCase());
+  if (!entry) {
+    return ' (measured: gem not present in selected socket group; static recommendation only)';
+  }
+  if (entry.failed) {
+    const reason = entry.failureReason ? ` - ${entry.failureReason}` : '';
+    return ` (measured: failed${reason}; static recommendation only)`;
+  }
+  if (entry.alreadyDisabled) {
+    return ' (measured: already disabled in this configuration; safe to replace)';
+  }
+  if (entry.contributionPercent == null) {
+    return ' (measured: no modeled DPS-field delta across tracked fields; static recommendation only)';
+  }
+  const field = entry.primaryField ?? 'primary DPS field';
+  const percent = entry.contributionPercent.toFixed(1);
+  if (entry.contributionPercent >= MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT) {
+    return ` (measured: currently contributes ${percent}% ${field} — at or above ${MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT}% threshold; verify swap with measure_link_contributions before replacing)`;
+  }
+  return ` (measured: currently contributes ${percent}% ${field} — below ${MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT}% threshold)`;
+}
+
+function appendSuggestSupportTrailingNotice(
+  outputLines: string[],
+  measureRequested: boolean,
+  measurementSucceeded: boolean,
+  measurementPartial: boolean,
+  measurementUnavailableReason: string | undefined,
+): void {
+  if (!measureRequested) return;
+  outputLines.push('');
+  if (measurementSucceeded && measurementPartial) {
+    outputLines.push(MEASURED_LINK_PARTIAL_NOTICE);
+    return;
+  }
+  if (measurementSucceeded) {
+    outputLines.push(MEASURED_LINK_NOTICE);
+    return;
+  }
+  outputLines.push(`Measurement requested but unavailable: ${measurementUnavailableReason ?? 'unknown reason'}. Falling back to static recommendations.`);
 }
 
 /**

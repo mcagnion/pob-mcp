@@ -28,15 +28,15 @@ export interface AdvancedOptimizationContext {
   ensureLuaClient: () => Promise<void>;
 }
 
-const LINK_MEASUREMENT_GUARDRAIL =
+export const LINK_MEASUREMENT_GUARDRAIL =
   'Guardrail: before replacing supports, run measure_link_contributions on the loaded build; estimates here are structural and not a measured DPS ranking.';
-const MEASURED_LINK_NOTICE =
+export const MEASURED_LINK_NOTICE =
   'Measured link contributions were folded into this analysis; static "no more multipliers" warnings have been downgraded where measurement contradicts.';
-const MEASURED_LINK_PARTIAL_NOTICE =
+export const MEASURED_LINK_PARTIAL_NOTICE =
   'Measured link contributions were partial: at least one gem failed to measure or the measurement loop aborted on a restore failure. Treat the measured signals below as incomplete and rerun measure_link_contributions before replacing supports.';
-const MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT = 10;
+export const MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT = 10;
 
-async function buildMeasuredSkillContext(
+export async function buildMeasuredSkillContext(
   luaClient: PoBLuaApiClient | null,
   buildName: string | undefined,
   groupIndex?: number,
