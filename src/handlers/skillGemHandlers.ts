@@ -4,11 +4,31 @@ import type { PoBLuaApiClient } from "../pobLuaBridge.js";
 import { wrapHandler } from "../utils/errorHandling.js";
 import {
   buildMeasuredSkillContext,
+  findSkillGroup,
+  gemIdentity,
+  groupGemList,
+  measureGemDisable,
+  numericStat,
+  GEM_CONTRIBUTION_PREVIEW_FIELDS,
+  GEM_CONTRIBUTION_DPS_PRIORITY_FIELDS,
+  LINK_MEASUREMENT_GUARDRAIL,
   MEASURED_LINK_NOTICE,
   MEASURED_LINK_PARTIAL_NOTICE,
   MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT,
-} from "./advancedOptimizationHandlers.js";
+  type GemIdentity,
+  type GemContributionMeasurement,
+} from "../services/skillMeasurement.js";
 import type { MeasuredGemEntry } from "../skillLinkOptimizer.js";
+
+// Re-export for back-compat with existing handler-tree imports (tests, etc.).
+export {
+  findSkillGroup,
+  gemIdentity,
+  groupGemList,
+  measureGemDisable,
+  type GemIdentity,
+  type GemContributionMeasurement,
+};
 
 export interface SkillGemHandlerContext {
   buildService: BuildService;
@@ -21,6 +41,9 @@ export interface SkillGemHandlerContext {
 const GEM_MECHANICS_FRESHNESS_NOTE =
   'Gem quality, corruption outcomes, and Exceptional/alternate gem availability are version-sensitive. Verify with current PoB gem data and post-change stat readback before buying or corrupting.';
 
+// Gem-quality field lists kept local to this file: they pre-date the
+// measurement extraction and are reused by the gem-quality preview path
+// (validate_gem_quality), not the gem-disable path now in skillMeasurement.
 const GEM_QUALITY_PREVIEW_FIELDS = [
   'FullDPS',
   'FullDotDPS',
@@ -39,12 +62,8 @@ const GEM_QUALITY_DPS_PRIORITY_FIELDS = [
   'TotalDotDPS',
 ];
 
-const GEM_CONTRIBUTION_PREVIEW_FIELDS = GEM_QUALITY_PREVIEW_FIELDS;
-const GEM_CONTRIBUTION_DPS_PRIORITY_FIELDS = GEM_QUALITY_DPS_PRIORITY_FIELDS;
 const GEM_CONTRIBUTION_WARNING =
   'Measured contribution is marginal at the current configuration; values are not additive across multiple gem changes.';
-const LINK_MEASUREMENT_GUARDRAIL =
-  'Guardrail: before replacing supports, run measure_link_contributions on the loaded build; estimates here are structural and not a measured DPS ranking.';
 const DEFAULT_HEURISTIC_GEM_MEASUREMENT = 'heuristic estimate only (not live PoB DPS)';
 const DEFAULT_UNVERIFIED_GEM_ACQUISITION = 'unverified in requested league';
 
@@ -76,32 +95,6 @@ interface GemQualityMeasurement {
   restoredStats?: Record<string, any>;
   targetQuality: number;
   dpsScore: number | null;
-  error?: string;
-}
-
-export interface GemIdentity {
-  groupIndex: number;
-  groupLabel: string;
-  slot: string;
-  gemIndex: number;
-  name: string;
-  level?: number;
-  quality?: number;
-  enabled: boolean;
-  isSupport: boolean;
-}
-
-export interface GemContributionMeasurement extends GemIdentity {
-  restored: boolean;
-  before: Record<string, any>;
-  after: Record<string, any>;
-  restoredStats?: Record<string, any>;
-  primaryField?: string;
-  primaryBefore?: number;
-  primaryAfter?: number;
-  contribution: number | null;
-  contributionPercent: number | null;
-  alreadyDisabled: boolean;
   error?: string;
 }
 
@@ -191,12 +184,6 @@ function formatNumber(value: number): string {
     : value.toLocaleString('en-US', { maximumFractionDigits: 3 });
 }
 
-function numericStat(stats: Record<string, any> | undefined, field: string): number | null {
-  if (!stats || stats[field] == null) return null;
-  const value = Number(stats[field]);
-  return Number.isFinite(value) ? value : null;
-}
-
 function formatMeasuredDelta(field: string, before: number, after: number): string {
   const delta = after - before;
   const sign = delta > 0 ? '+' : '';
@@ -261,64 +248,6 @@ function contributionDeltaLines(measurement: GemContributionMeasurement): string
   return changedLines;
 }
 
-function primaryContribution(
-  beforeStats: Record<string, any>,
-  afterStats: Record<string, any>
-): { field: string; before: number; after: number; loss: number; percent: number | null } | null {
-  for (const field of GEM_CONTRIBUTION_DPS_PRIORITY_FIELDS) {
-    const before = numericStat(beforeStats, field);
-    const after = numericStat(afterStats, field);
-    if (before != null && after != null) {
-      const loss = before - after;
-      return {
-        field,
-        before,
-        after,
-        loss,
-        percent: before !== 0 ? (loss / before) * 100 : null,
-      };
-    }
-  }
-  return null;
-}
-
-export function groupGemList(group: any): any[] {
-  if (Array.isArray(group?.gems) && group.gems.length > 0) {
-    return group.gems;
-  }
-  if (Array.isArray(group?.skills)) {
-    return group.skills.map((skillName: string, index: number) => ({
-      index: index + 1,
-      name: skillName,
-      enabled: true,
-      isSupport: index > 0,
-    }));
-  }
-  return [];
-}
-
-export function gemIdentity(group: any, gem: any, fallbackIndex: number): GemIdentity {
-  const gemIndex = Number(gem?.index ?? fallbackIndex);
-  return {
-    groupIndex: Number(group?.index),
-    groupLabel: group?.label || `Group ${group?.index ?? '?'}`,
-    slot: group?.slot || 'Unknown',
-    gemIndex,
-    name: gem?.name || gem?.nameSpec || `Gem ${gemIndex}`,
-    level: typeof gem?.level === 'number' ? gem.level : undefined,
-    quality: typeof gem?.quality === 'number' ? gem.quality : undefined,
-    enabled: gem?.enabled !== false,
-    isSupport: gem?.isSupport === true || (typeof gem?.name === 'string' && gem.name.includes('Support')),
-  };
-}
-
-export function findSkillGroup(skills: any, groupIndex?: number): any | null {
-  const groups = Array.isArray(skills?.groups) ? skills.groups : [];
-  if (groups.length === 0) return null;
-  const targetIndex = groupIndex ?? Number(skills?.mainSocketGroup ?? groups[0]?.index);
-  return groups.find((group: any) => Number(group?.index) === targetIndex) ?? null;
-}
-
 function findGemInGroup(group: any, gemIndex: number): { gem: any; fallbackIndex: number } | null {
   const gems = groupGemList(group);
   for (let index = 0; index < gems.length; index++) {
@@ -379,60 +308,6 @@ export async function getLiveGemContext(
     return {
       ok: false,
       message: `Measurement unavailable: could not read loaded skill gems (${msg}). No ranking produced.`,
-    };
-  }
-}
-
-export async function measureGemDisable(
-  luaClient: PoBLuaApiClient,
-  identity: GemIdentity
-): Promise<GemContributionMeasurement> {
-  if (!identity.enabled) {
-    return {
-      ...identity,
-      restored: true,
-      before: {},
-      after: {},
-      contribution: 0,
-      contributionPercent: 0,
-      alreadyDisabled: true,
-    };
-  }
-
-  try {
-    const preview = await luaClient.previewGemEnabled({
-      groupIndex: identity.groupIndex,
-      gemIndex: identity.gemIndex,
-      enabled: false,
-      fields: GEM_CONTRIBUTION_PREVIEW_FIELDS,
-    });
-    if (preview.restored !== true) {
-      throw new Error('preview did not restore original gem state');
-    }
-    const primary = primaryContribution(preview.before ?? {}, preview.after ?? {});
-    return {
-      ...identity,
-      restored: preview.restored === true,
-      before: preview.before ?? {},
-      after: preview.after ?? {},
-      restoredStats: preview.restoredStats,
-      primaryField: primary?.field,
-      primaryBefore: primary?.before,
-      primaryAfter: primary?.after,
-      contribution: primary?.loss ?? null,
-      contributionPercent: primary?.percent ?? null,
-      alreadyDisabled: false,
-    };
-  } catch (error) {
-    return {
-      ...identity,
-      restored: false,
-      before: {},
-      after: {},
-      contribution: null,
-      contributionPercent: null,
-      alreadyDisabled: false,
-      error: error instanceof Error ? error.message : String(error),
     };
   }
 }
