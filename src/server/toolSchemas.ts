@@ -1218,7 +1218,7 @@ export function getSkillGemToolSchemas(): any[] {
     },
     {
       name: "find_optimal_links",
-      description: "Auto-generate a support gem combination for a skill based on budget and optimization goal. Outputs heuristic DPS estimates plus measured/acquirable/price-checked labels; verify current-league acquisition and prices before buying.",
+      description: "Auto-generate a support gem combination for a skill based on budget and optimization goal. Outputs heuristic DPS estimates plus measured/acquirable/price-checked labels; verify current-league acquisition and prices before buying. Pass measure=true to disable each gem in the selected socket group via the Lua bridge and add a Measured Current Baseline section showing what each currently-equipped gem actually contributes (the floor a swap must clear); each Upgrade Path step also gets a 'Replaced gem measured:' line annotating the gem the static recommendation would remove (slower; runs N disable/restore previews on the loaded build).",
       inputSchema: {
         type: "object",
         properties: {
@@ -1245,6 +1245,10 @@ export function getSkillGemToolSchemas(): any[] {
           optimize_for: {
             type: "string",
             description: "Optimization target: 'dps', 'clear_speed', 'bossing', or 'defense' (default: 'dps')",
+          },
+          measure: {
+            type: "boolean",
+            description: "Opt-in: when true and the Lua bridge has the requested build loaded, measure every gem in the selected socket group, emit a Measured Current Baseline section, and annotate each Upgrade Path step's replaced gem with its measured contribution. Default false (purely static).",
           },
         },
         required: ["build_name", "link_count"],
