@@ -554,6 +554,7 @@ export async function routeToolCall(
         link_count: args.link_count as number,
         budget: args.budget as "league_start" | "mid_league" | "endgame" | undefined,
         optimize_for: args.optimize_for as "dps" | "clear_speed" | "bossing" | "defense" | undefined,
+        measure: args.measure === true,
       });
 
     // ========================================

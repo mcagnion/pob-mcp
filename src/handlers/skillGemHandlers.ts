@@ -1184,6 +1184,7 @@ export async function handleFindOptimalLinks(
     link_count: number;
     budget?: "league_start" | "mid_league" | "endgame";
     optimize_for?: "dps" | "clear_speed" | "bossing" | "defense";
+    measure?: boolean;
   }
 ) {
   const { buildService, skillGemService } = context;
@@ -1207,6 +1208,33 @@ export async function handleFindOptimalLinks(
     budget: args.budget,
   });
 
+  // Optional measurement pass (mirrors handleSuggestSupportGems): when the
+  // caller asks for measured data, disable each gem in the selected socket
+  // group via the Lua bridge so we can emit a Measured Current Baseline
+  // section showing what every currently-equipped gem actually contributes,
+  // and annotate "(replace X)" lines in the Upgrade Path with the same
+  // measured contribution data.
+  let measuredEntries: Map<string, MeasuredGemEntry> | undefined;
+  let measuredEntriesOrdered: MeasuredGemEntry[] = [];
+  let measuredPrimaryField: string | undefined;
+  let measurementPartial = false;
+  let measurementUnavailableReason: string | undefined;
+  if (args.measure) {
+    const luaClient = context.getLuaClient?.() ?? null;
+    const measured = await buildMeasuredSkillContext(luaClient, args.build_name, skillIndex + 1);
+    if (measured.context) {
+      measuredEntries = new Map();
+      for (const entry of measured.context.entries) {
+        measuredEntries.set(entry.name.toLowerCase(), entry);
+      }
+      measuredEntriesOrdered = measured.context.entries;
+      measurementPartial = measured.context.partial;
+      measuredPrimaryField = measured.context.primaryField;
+    } else {
+      measurementUnavailableReason = measured.reason ?? 'unknown reason';
+    }
+  }
+
   const budget = args.budget || "endgame";
   const optimizeFor = args.optimize_for || "dps";
 
@@ -1226,6 +1254,10 @@ export async function handleFindOptimalLinks(
     outputLines.push(`${i + 2}. ${suggestions[i].gem}`);
   }
 
+  if (measuredEntries) {
+    appendMeasuredCurrentBaseline(outputLines, measuredEntriesOrdered, measuredPrimaryField);
+  }
+
   outputLines.push('', '=== Upgrade Path ===', '');
 
   let cumulativeDPS = 0;
@@ -1242,6 +1274,12 @@ export async function handleFindOptimalLinks(
       stepLine += ` (replace ${suggestion.replaces})`;
     }
     outputLines.push(stepLine);
+    if (suggestion.replaces && measuredEntries) {
+      const replacedLine = formatReplacedGemMeasuredLine(suggestion.replaces, measuredEntries);
+      if (replacedLine) {
+        outputLines.push(replacedLine);
+      }
+    }
     outputLines.push(`Measured: ${measured}`);
     outputLines.push(`Acquirable: ${acquirable}`);
     outputLines.push(`Price-checked: ${priceChecked ? "yes" : "no"}`);
@@ -1266,6 +1304,8 @@ export async function handleFindOptimalLinks(
       outputLines.push('', `💡 Best first upgrade: ${bestSuggestion.gem} (+${bestSuggestion.dpsIncrease.toFixed(1)}%)`);
     }
   }
+
+  appendSuggestSupportTrailingNotice(outputLines, args.measure === true, measuredEntries !== undefined, measurementPartial, measurementUnavailableReason);
   const output = outputLines.join('\n');
 
   return {
@@ -1276,6 +1316,70 @@ export async function handleFindOptimalLinks(
       },
     ],
   };
+}
+
+function appendMeasuredCurrentBaseline(
+  outputLines: string[],
+  entries: MeasuredGemEntry[],
+  primaryField: string | undefined,
+): void {
+  outputLines.push('', '=== Measured Current Baseline ===');
+  if (entries.length === 0) {
+    outputLines.push('No measurable gems in the selected socket group.');
+    return;
+  }
+  const fieldLabel = primaryField ?? 'primary DPS field';
+  outputLines.push(`Current configuration measured by disabling each gem one at a time (${fieldLabel}). Use these contributions as the floor a swap must clear:`);
+  for (const entry of entries) {
+    outputLines.push(`- ${formatMeasuredBaselineEntry(entry, fieldLabel)}`);
+  }
+}
+
+function formatMeasuredBaselineEntry(entry: MeasuredGemEntry, fallbackField: string): string {
+  const role = entry.isSupport ? 'support' : 'active';
+  const prefix = `${entry.name} (${role})`;
+  if (entry.failed) {
+    const reason = entry.failureReason ? ` - ${entry.failureReason}` : '';
+    return `${prefix}: measurement failed${reason}`;
+  }
+  if (entry.alreadyDisabled) {
+    return `${prefix}: already disabled in this configuration (0% measured)`;
+  }
+  if (entry.contributionPercent == null) {
+    return `${prefix}: no modeled DPS-field delta across tracked fields`;
+  }
+  const field = entry.primaryField ?? fallbackField;
+  const percent = entry.contributionPercent.toFixed(1);
+  if (entry.contributionPercent >= MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT) {
+    return `${prefix}: ${percent}% ${field} contribution — at or above ${MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT}% threshold (high cost to replace)`;
+  }
+  return `${prefix}: ${percent}% ${field} contribution — below ${MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT}% threshold`;
+}
+
+function formatReplacedGemMeasuredLine(
+  replacedName: string,
+  measuredEntries: Map<string, MeasuredGemEntry>,
+): string | null {
+  const entry = measuredEntries.get(replacedName.toLowerCase());
+  if (!entry) {
+    return `Replaced gem measured: ${replacedName} not present in selected socket group; static recommendation only`;
+  }
+  if (entry.failed) {
+    const reason = entry.failureReason ? ` - ${entry.failureReason}` : '';
+    return `Replaced gem measured: failed${reason}; static recommendation only`;
+  }
+  if (entry.alreadyDisabled) {
+    return `Replaced gem measured: already disabled in this configuration; safe to replace`;
+  }
+  if (entry.contributionPercent == null) {
+    return `Replaced gem measured: no modeled DPS-field delta across tracked fields; static recommendation only`;
+  }
+  const field = entry.primaryField ?? 'primary DPS field';
+  const percent = entry.contributionPercent.toFixed(1);
+  if (entry.contributionPercent >= MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT) {
+    return `Replaced gem measured: currently contributes ${percent}% ${field} — at or above ${MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT}% threshold; verify swap with measure_link_contributions before replacing`;
+  }
+  return `Replaced gem measured: currently contributes ${percent}% ${field} — below ${MULTIPLIER_EQUIVALENT_THRESHOLD_PERCENT}% threshold`;
 }
 
 /**
