@@ -442,10 +442,50 @@ export async function handleSetBuildNotes(context: HandlerContext, buildName: st
     await fs.writeFile(buildPath, xml, 'utf-8');
     // Invalidate the build cache so a subsequent get_build_notes reads the updated file
     context.buildService.invalidateBuild(buildName);
+
+    // Sync the Lua bridge's in-memory NotesTab buffer when the same build is
+    // already loaded in a live bridge; otherwise a subsequent lua_save_build
+    // serialises the stale buffer and silently overwrites the on-disk notes.
+    //
+    // Use getLuaClient() (not ensureLuaClient()): a stale in-memory buffer can
+    // only exist in a bridge that is already running with that build loaded.
+    // Starting a fresh bridge here would do nothing useful (newly started =
+    // no stale buffer) and would impose a slow Lua startup + Init Test side
+    // effect on every disk-only notes write.
+    //
+    // Catch boundaries are split intentionally: a sync failure when the same
+    // build is loaded leaves the stale in-memory buffer in place and is itself
+    // a data-loss risk (the next lua_save_build will overwrite the disk notes).
+    // Surface that case loudly instead of returning a misleading plain success.
+    let memorySyncSuffix = '';
+    const luaClient = context.getLuaClient();
+    if (luaClient) {
+      let loadedMatches = false;
+      try {
+        const info = await luaClient.getBuildInfo();
+        const loadedName: string = info?.name ?? '';
+        if (loadedName) {
+          const basename = (n: string) => n.split(/[/\\]/).pop() ?? n;
+          const requested = buildName.replace(/\.xml$/i, '');
+          const loaded = loadedName.replace(/\.xml$/i, '');
+          loadedMatches = loaded === requested || basename(loaded) === basename(requested);
+        }
+      } catch { /* no build loaded — nothing to sync, and not a data-loss risk */ }
+      if (loadedMatches) {
+        try {
+          await luaClient.setNotes(notes);
+          memorySyncSuffix = ' In-memory build synced (safe to lua_save_build).';
+        } catch (err) {
+          const reason = (err as Error).message || String(err);
+          memorySyncSuffix = ` ⚠️ In-memory sync FAILED (${reason}). DO NOT call lua_save_build before lua_reload_build — the stale in-memory NotesTab buffer would overwrite the new disk notes.`;
+        }
+      }
+    }
+
     return {
       content: [{
         type: 'text' as const,
-        text: `✅ Notes updated in ${buildName} (${notes.length} characters).`,
+        text: `✅ Notes updated in ${buildName} (${notes.length} characters).${memorySyncSuffix}`,
       }],
     };
   });

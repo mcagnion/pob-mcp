@@ -225,7 +225,7 @@ export function getToolSchemas(): ToolSchema[] {
     },
     {
       name: "set_build_notes",
-      description: "Write notes/documentation into a PoB build file (overwrites existing notes)",
+      description: "Write notes/documentation into a PoB build file (overwrites existing notes). Writes to disk and, when the same build is loaded in the Lua bridge, also syncs the in-memory NotesTab buffer so a subsequent lua_save_build does not silently overwrite the new notes.",
       inputSchema: {
         type: "object",
         properties: {

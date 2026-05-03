@@ -418,6 +418,12 @@ export class PoBLuaApiClient {
     return res.result;
   }
 
+  async setNotes(text: string): Promise<{ length: number }> {
+    const res = await this.send({ action: "set_notes", params: { text } });
+    if (!res.ok) throw new Error(res.error || "set_notes failed");
+    return res.result as { length: number };
+  }
+
   async loadBuildXml(xml: string, name = "API Build"): Promise<any> {
     const res = await this.send({ action: "load_build_xml", params: { xml, name } });
     if (!res.ok) throw new Error(res.error || "load_build_xml failed");
