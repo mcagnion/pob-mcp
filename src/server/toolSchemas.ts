@@ -466,7 +466,7 @@ export function getLuaToolSchemas(): any[] {
     },
     {
       name: "add_item",
-      description: "Add an item to the build from item text (paste from game)",
+      description: "Add an item to the build from item text (paste from game). Equipment slots only. For passive-tree jewel sockets use add_jewel.",
       inputSchema: {
         type: "object",
         properties: {
@@ -481,6 +481,36 @@ export function getLuaToolSchemas(): any[] {
           },
         },
         required: ["item_text", "slot_name"],
+      },
+    },
+    {
+      name: "list_jewel_sockets",
+      description: "List all allocated jewel sockets on the active spec, with their passive-tree node id, node name (e.g., 'Lethal Pride', 'Forbidden Flame'), whether they are cluster-jewel sockets, and the currently equipped jewel (or null if empty). Use this before add_jewel to discover socket node_ids.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+      },
+    },
+    {
+      name: "add_jewel",
+      description: "Add a jewel item to a passive-tree jewel socket (the equipment-slot enum on add_item does not cover jewel sockets). Provide either socket_node_id (preferred, from list_jewel_sockets) or socket_name (e.g., 'Lethal Pride'). The target socket must be allocated on the active spec. Verifies post-mutation that PoB actually placed the jewel; rejects on validation failures (non-Jewel item text, charm/non-charm-socket mismatch, cluster-jewel-size incompatibility). Silently replaces an existing jewel; returns was_replacement: true when overwriting.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          jewel_text: {
+            type: "string",
+            description: "Full PoB raw item text for the jewel (paste from game).",
+          },
+          socket_node_id: {
+            type: "number",
+            description: "Passive tree socket node id (preferred). Get from list_jewel_sockets output.",
+          },
+          socket_name: {
+            type: "string",
+            description: "Socket name (e.g., 'Lethal Pride'). Used when socket_node_id is omitted. Exact match preferred; falls back to substring with all candidates listed if ambiguous.",
+          },
+        },
+        required: ["jewel_text"],
       },
     },
     {

@@ -54,6 +54,15 @@ export interface ItemSkillContext {
 }
 
 /**
+ * Context for jewel-tree-socket operations (Lua + tree metadata for node names)
+ */
+export interface JewelHandlerContext {
+  treeService: TreeService;
+  getLuaClient: () => PoBLuaApiClient | null;
+  ensureLuaClient: () => Promise<void>;
+}
+
+/**
  * Context for optimization operations (combines build/tree services with Lua)
  */
 export interface OptimizationContext {
@@ -185,6 +194,17 @@ export class ContextBuilder {
    */
   buildItemSkillContext(): ItemSkillContext {
     return {
+      getLuaClient: this.deps.getLuaClient,
+      ensureLuaClient: this.deps.ensureLuaClient,
+    };
+  }
+
+  /**
+   * Build context for jewel-tree-socket operations
+   */
+  buildJewelHandlerContext(): JewelHandlerContext {
+    return {
+      treeService: this.deps.treeService,
       getLuaClient: this.deps.getLuaClient,
       ensureLuaClient: this.deps.ensureLuaClient,
     };
