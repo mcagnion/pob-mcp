@@ -21,6 +21,7 @@ import { handleGetBuildIssues, formatIssuesResponse } from "../handlers/buildGoa
 import { handleLuaStart, handleLuaStop, handleLuaNewBuild, handleLuaSaveBuild, handleLuaLoadBuild, handleLuaGetStats, handleLuaGetTree, handleLuaSetTree, handleSearchTreeNodes, handleLuaGetBuildInfo, handleLuaReloadBuild, handleUpdateTreeDelta, handleCreateSpec, handleListSpecs, handleSelectSpec, handleDeleteSpec, handleRenameSpec, handleListItemSets, handleSelectItemSet } from "../handlers/luaHandlers.js";
 import { handleListCharacters, handleImportCharacter } from "../handlers/importHandlers.js";
 import { handleAddItem, handleGetEquippedItems, handleToggleFlask, handleGetSkillSetup, handleSetMainSkill, handleCreateSocketGroup, handleAddGem, handleSetGemLevel, handleSetGemQuality, handleRemoveSkill, handleRemoveGem, handleSetupSkillWithGems, handleAddMultipleItems, handleSetSocketGroupEnabled, handleSetGemEnabled } from "../handlers/itemSkillHandlers.js";
+import { handleListJewelSockets, handleAddJewel } from "../handlers/jewelHandlers.js";
 import { handleAnalyzeDefenses, handleSuggestOptimalNodes, handleOptimizeTree } from "../handlers/optimizationHandlers.js";
 import { handleAnalyzeItems, handleOptimizeSkillLinks, handleCreateBudgetBuild } from "../handlers/advancedOptimizationHandlers.js";
 import { handleGetConfig, handleSetConfig, handleSetEnemyStats, handleSaveConfigPreset, handleLoadConfigPreset, handleListConfigPresets } from "../handlers/configHandlers.js";
@@ -80,6 +81,7 @@ export async function routeToolCall(
   const treeContext = deps.contextBuilder.buildTreeContext();
   const luaContext = deps.contextBuilder.buildLuaContext();
   const itemSkillContext = deps.contextBuilder.buildItemSkillContext();
+  const jewelContext = deps.contextBuilder.buildJewelHandlerContext();
   const optimizationContext = deps.contextBuilder.buildOptimizationContext();
   const exportContext = deps.contextBuilder.buildExportContext();
   const skillGemContext = deps.contextBuilder.buildSkillGemContext();
@@ -347,6 +349,18 @@ export async function routeToolCall(
     case "add_item":
       if (!args) throw new Error("Missing arguments");
       return await handleAddItem(itemSkillContext, args.item_text as string, args.slot_name as string | undefined, args.no_auto_equip as boolean | undefined);
+
+    case "list_jewel_sockets":
+      return await handleListJewelSockets(jewelContext);
+
+    case "add_jewel":
+      if (!args) throw new Error("Missing arguments");
+      return await handleAddJewel(
+        jewelContext,
+        args.jewel_text as string,
+        args.socket_node_id as number | undefined,
+        args.socket_name as string | undefined
+      );
 
     case "get_equipped_items":
       return await handleGetEquippedItems(itemSkillContext);
