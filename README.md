@@ -300,7 +300,7 @@ A build with all 3 layers is considered exceptional.
 
 | Tool | Description |
 |---|---|
-| `get_config` | View bandit, pantheon, and enemy settings |
+| `get_config` | View full configuration: bandit, pantheons, enemy settings, charges, buffs, conditions, and any other ConfigOptions input |
 | `set_config` | Toggle charges, buffs, conditions (e.g. `usePowerCharges`, `enemyIsBoss`) |
 | `analyze_charge_economy` | Explain current/min/max charges and their passive/item sources |
 | `set_enemy_stats` | Set enemy level, resistances, armour, evasion for DPS scenarios |

@@ -123,13 +123,30 @@ try {
   assert(r.appliedKeys.includes('usePowerCharges') && r.appliedKeys.includes('buffOnslaught'), 'both valid keys applied');
   assert(r.ignoredKeys.includes('garbage1') && r.ignoredKeys.includes('garbage2'), 'both garbage keys ignored');
 
-  // 7. Verify get_config reflects what we wrote
+  // 7. Verify get_config reflects the keys written via the prior set_config calls.
+  // get_config returns a scalar copy of the active configTab.input plus the
+  // bandit/pantheon/enemyLevel compatibility fallbacks.
   console.log('\n[7] get_config after the set_config calls');
-  const cfg = await client.getConfig();
-  console.log('   bandit/pantheon/enemyLevel snapshot:', JSON.stringify({
-    enemyLevel: cfg.enemyLevel,
-  }));
-  // Note: get_config currently only surfaces a tiny subset, that's a separate issue.
+  let cfg = await client.getConfig();
+  console.log('   keys:', Object.keys(cfg).sort((a, b) => a.localeCompare(b)).join(', '));
+  assert(typeof cfg.enemyLevel === 'number', 'enemyLevel preserved as number');
+  assert(cfg.usePowerCharges === true, 'usePowerCharges visible after set');
+  assert(cfg.buffOnslaught === true, 'buffOnslaught visible after set');
+  assert(cfg.enemyFireResist === 60, 'enemyFireResist visible after canonical set (step [5])');
+  assert(cfg.buffFortification === true, 'conditionFortify alias visible as buffFortification (step [1])');
+
+  // 8. Round-trip a passthrough key (conditionEnemyBurning) via set_config -> get_config.
+  console.log('\n[8] set_config({conditionEnemyBurning: true}) -> get_config');
+  await client.setConfig({ conditionEnemyBurning: true });
+  cfg = await client.getConfig();
+  assert(cfg.conditionEnemyBurning === true, 'conditionEnemyBurning visible after passthrough set');
+
+  // 9. Clearing a condition is reflected in get_config.
+  console.log('\n[9] set_config({conditionEnemyBurning: false}) -> get_config');
+  await client.setConfig({ conditionEnemyBurning: false });
+  cfg = await client.getConfig();
+  assert(cfg.conditionEnemyBurning === false || cfg.conditionEnemyBurning === undefined,
+    'conditionEnemyBurning cleared after false set');
 
 } catch (e) {
   failures++;
