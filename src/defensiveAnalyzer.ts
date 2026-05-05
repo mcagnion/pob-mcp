@@ -13,12 +13,27 @@
  * An exceptional build has all 3, with strong values in each.
  */
 
+// Endgame survivability thresholds (single physical hit ceiling).
+// Pinnacle bosses regularly hit 30k+; below 25k a single hit can kill.
+// Element MaxHits use the same "high" cutoff but no "critical" tier
+// because phys is the dominant one-shot vector in PoE1.
+export const PHYS_MAXHIT_CRITICAL = 25_000;
+export const PHYS_MAXHIT_HIGH = 30_000;
+export const ELEMENT_MAXHIT_HIGH = 30_000;
+
+// CurseEffectOnSelf is the PoB output multiplier (% — 100 baseline,
+// 0 = Unaffected by Curses). Above this we treat the build as
+// having no anti-curse layer.
+export const CURSE_EFFECT_NO_MITIGATION_PCT = 95;
+
 export interface DefensiveAnalysis {
   resistances: ResistanceAnalysis;
   lifePool: LifePoolAnalysis;
   avoidance: AvoidanceAnalysis;
   mitigation: MitigationAnalysis;
   sustain: SustainAnalysis;
+  maxHits: MaxHitAnalysis;
+  curseMitigation: CurseMitigationAnalysis;
   recommendations: Recommendation[];
   overallScore: 'excellent' | 'good' | 'fair' | 'poor' | 'critical';
   defensiveLayerCount: number;
@@ -71,9 +86,38 @@ export interface SustainAnalysis {
   overall: 'excellent' | 'good' | 'adequate' | 'poor';
 }
 
+export type RecommendationCategory =
+  | 'resistance'
+  | 'life'
+  | 'mitigation'
+  | 'sustain'
+  | 'avoidance'
+  | 'layers'
+  | 'maxhit'
+  | 'curse';
+
+export interface MaxHitAnalysis {
+  physical: number;
+  fire: number;
+  cold: number;
+  lightning: number;
+  chaos: number;
+  // Damage types whose ceiling is below the endgame "high" threshold.
+  // 'physical' is also flagged here when below PHYS_MAXHIT_CRITICAL.
+  gaps: Array<{ type: 'physical' | 'fire' | 'cold' | 'lightning' | 'chaos'; value: number; severity: 'critical' | 'high' }>;
+}
+
+export interface CurseMitigationAnalysis {
+  // PoB output: 100 = baseline, 0 = Unaffected by Curses, <100 = reduced.
+  // null when the stat is absent (older Lua bridge); we don't warn on null
+  // since there's no signal one way or the other.
+  curseEffectOnSelf: number | null;
+  status: 'immune' | 'reduced' | 'baseline' | 'amplified' | 'unknown';
+}
+
 export interface Recommendation {
   priority: 'critical' | 'high' | 'medium' | 'low';
-  category: 'resistance' | 'life' | 'mitigation' | 'sustain' | 'avoidance' | 'layers';
+  category: RecommendationCategory;
   issue: string;
   solutions: string[];
   impact?: string;
@@ -88,13 +132,18 @@ export function analyzeDefenses(stats: Record<string, any>): DefensiveAnalysis {
   const avoidance = analyzeAvoidance(stats);
   const mitigation = analyzeMitigation(stats);
   const sustain = analyzeSustain(stats);
+  const maxHits = analyzeMaxHits(stats);
+  const curseMitigation = analyzeCurseMitigation(stats);
 
   const recommendations: Recommendation[] = [];
   recommendations.push(...generateResistanceRecommendations(resistances));
   recommendations.push(...generateLifePoolRecommendations(lifePool));
   recommendations.push(...generateAvoidanceRecommendations(avoidance));
+  recommendations.push(...generateSpellDefenseGapRecommendations(avoidance, mitigation));
   recommendations.push(...generateMitigationRecommendations(mitigation, stats));
   recommendations.push(...generateSustainRecommendations(sustain));
+  recommendations.push(...generateMaxHitRecommendations(maxHits));
+  recommendations.push(...generateCurseMitigationRecommendations(curseMitigation, maxHits));
 
   // Evaluate defensive layers
   const avoidanceLayer = avoidance.hasSignificantAvoidance;
@@ -133,7 +182,10 @@ export function analyzeDefenses(stats: Record<string, any>): DefensiveAnalysis {
     return order[a.priority] - order[b.priority];
   });
 
-  const overallScore = calculateOverallScore(resistances, lifePool, mitigation, sustain, defensiveLayerCount);
+  const overallScore = calculateOverallScore({
+    resistances, lifePool, mitigation, sustain, defensiveLayerCount,
+    avoidance, maxHits, curseMitigation,
+  });
 
   return {
     resistances,
@@ -141,6 +193,8 @@ export function analyzeDefenses(stats: Record<string, any>): DefensiveAnalysis {
     avoidance,
     mitigation,
     sustain,
+    maxHits,
+    curseMitigation,
     recommendations,
     overallScore,
     defensiveLayerCount,
@@ -415,6 +469,60 @@ function analyzeSustain(stats: Record<string, any>): SustainAnalysis {
   };
 }
 
+function analyzeMaxHits(stats: Record<string, any>): MaxHitAnalysis {
+  const getStat = (key: string): number => {
+    if (stats[key] !== undefined) return parseFloat(stats[key]) || 0;
+    if (stats[`Player${key}`] !== undefined) return parseFloat(stats[`Player${key}`]) || 0;
+    return 0;
+  };
+
+  const physical = getStat('PhysicalMaximumHitTaken');
+  const fire = getStat('FireMaximumHitTaken');
+  const cold = getStat('ColdMaximumHitTaken');
+  const lightning = getStat('LightningMaximumHitTaken');
+  const chaos = getStat('ChaosMaximumHitTaken');
+
+  const gaps: MaxHitAnalysis['gaps'] = [];
+  if (physical > 0 && physical < PHYS_MAXHIT_CRITICAL) {
+    gaps.push({ type: 'physical', value: physical, severity: 'critical' });
+  } else if (physical > 0 && physical < PHYS_MAXHIT_HIGH) {
+    gaps.push({ type: 'physical', value: physical, severity: 'high' });
+  }
+  for (const [type, value] of [
+    ['fire', fire], ['cold', cold], ['lightning', lightning], ['chaos', chaos],
+  ] as const) {
+    if (value > 0 && value < ELEMENT_MAXHIT_HIGH) {
+      gaps.push({ type, value, severity: 'high' });
+    }
+  }
+
+  return { physical, fire, cold, lightning, chaos, gaps };
+}
+
+function analyzeCurseMitigation(stats: Record<string, any>): CurseMitigationAnalysis {
+  const raw = stats.CurseEffectOnSelf;
+  // If the stat isn't present, the bridge / build doesn't expose curse output
+  // (older Lua, build loaded before CalcDefence ran). Return 'unknown' so we
+  // neither flag a false missing layer nor claim curse mitigation.
+  if (raw === undefined || raw === null) {
+    return { curseEffectOnSelf: null, status: 'unknown' };
+  }
+  const curseEffectOnSelf = parseFloat(raw) || 0;
+
+  let status: CurseMitigationAnalysis['status'];
+  if (curseEffectOnSelf <= 0) {
+    status = 'immune';
+  } else if (curseEffectOnSelf < CURSE_EFFECT_NO_MITIGATION_PCT) {
+    status = 'reduced';
+  } else if (curseEffectOnSelf <= 105) {
+    status = 'baseline';
+  } else {
+    status = 'amplified';
+  }
+
+  return { curseEffectOnSelf, status };
+}
+
 function generateResistanceRecommendations(analysis: ResistanceAnalysis): Recommendation[] {
   const recs: Recommendation[] = [];
   const uncapped: string[] = [];
@@ -557,6 +665,131 @@ function generateMitigationRecommendations(
   return recs;
 }
 
+// Spell hits bypass attack BlockChance and EvasionRating (PoE1: evasion is
+// attack-only). Only SpellSuppression / SpellBlockChance / SpellDodgeChance
+// reduce spell damage. A build with strong attack defense but no spell
+// defense layer takes full spell damage every hit.
+function generateSpellDefenseGapRecommendations(
+  avoidance: AvoidanceAnalysis,
+  mitigation: MitigationAnalysis
+): Recommendation[] {
+  const recs: Recommendation[] = [];
+  const supp = avoidance.spellSuppression;
+  const spellBlock = mitigation.spellBlock.value;
+  const spellDodge = avoidance.spellDodge;
+
+  const hasSpellDefense = supp >= 30 || spellBlock >= 30 || spellDodge >= 30;
+  if (hasSpellDefense) return recs;
+
+  const noSpellLayerAtAll = supp <= 0 && spellBlock <= 0 && spellDodge <= 0;
+  recs.push({
+    priority: noSpellLayerAtAll ? 'critical' : 'high',
+    category: 'avoidance',
+    issue: noSpellLayerAtAll
+      ? 'No spell-hit defense (suppression 0, spell block 0, spell dodge 0)'
+      : `Spell-hit defense is below threshold (suppression ${supp}%, spell block ${spellBlock}%, spell dodge ${spellDodge}%)`,
+    solutions: [
+      'Spell Suppression: each suppressed hit takes 50% damage; Suppression Chance caps at 100% (50% is the practical endgame floor) — clusters on Shadow/Ranger tree side',
+      'Spell Block: Aegis Aurora shield, Stone of Lazhwar amulet, Glancing Blows keystone (doubles block chance, 65% damage taken from blocked hits)',
+      'Spell Dodge: Acrobatics keystone converts Spell Suppression Chance to Spell Dodge at 50% efficiency (cap 75% spell dodge)',
+    ],
+    impact: 'Spell hits land at full damage without spell-specific defense; attack BlockChance and Evasion do NOT mitigate spells',
+  });
+  return recs;
+}
+
+function maxHitSolutions(type: MaxHitAnalysis['gaps'][number]['type']): string[] {
+  if (type === 'physical') {
+    return [
+      'Stack armour + endurance charges (Determination aura, Molten Shell guard skill, Immortal Call guard skill)',
+      'Cap physical damage reduction (90% via tempering + endurance charges + flasks)',
+      'Granite flask (+1500 Armour) or Basalt flask (20% more Armour) ramps armour-based physical mitigation during effect',
+      'Lightning Coil or Cloak of Flame body armour redirects a fraction of physical damage to elements',
+    ];
+  }
+  if (type === 'chaos') {
+    // Chaos has no penetration / Topaz-style flask story; remediation is
+    // chaos-resistance ramp, max-chaos-res suffixes, Amethyst flask, and
+    // CI as a drastic option.
+    return [
+      'Increase chaos resistance toward 75% cap (Curse and Chaos Resistance tree notable; chaos-res affixes on gear)',
+      'Add a chaos-resist Amethyst flask for chaos-heavy content',
+      'Push max chaos resistance via shield suffixes (of Regularity / Concord / Harmony) and Hunter-influence prefixes',
+      'Chaos Inoculation keystone (CI): immune to chaos at the cost of life (ES build only)',
+    ];
+  }
+  // Elemental (fire / cold / lightning)
+  const label = type[0].toUpperCase() + type.slice(1);
+  const flaskMap: Record<'fire' | 'cold' | 'lightning', string> = {
+    fire: 'Ruby',
+    cold: 'Sapphire',
+    lightning: 'Topaz',
+  };
+  return [
+    `Cap ${type} resistance and add overcap to absorb elemental penetration`,
+    `Add a defensive flask (${flaskMap[type]}) for ${label} damage`,
+    'Spell Suppression and Fortify scale max hits across elements',
+    'Loreweave or another EHP-multiplier unique can lift all element ceilings',
+  ];
+}
+
+function generateMaxHitRecommendations(analysis: MaxHitAnalysis): Recommendation[] {
+  const recs: Recommendation[] = [];
+  for (const gap of analysis.gaps) {
+    const typeLabel = gap.type.charAt(0).toUpperCase() + gap.type.slice(1);
+    const isPhysicalCritical = gap.type === 'physical' && gap.severity === 'critical';
+    recs.push({
+      priority: gap.severity,
+      category: 'maxhit',
+      issue: `${typeLabel} max hit ceiling: ${gap.value.toLocaleString()} (below ${
+        isPhysicalCritical
+          ? `${PHYS_MAXHIT_CRITICAL.toLocaleString()} pinnacle one-shot threshold`
+          : `${ELEMENT_MAXHIT_HIGH.toLocaleString()} endgame threshold`
+      })`,
+      solutions: maxHitSolutions(gap.type),
+      impact:
+        gap.severity === 'critical'
+          ? `Single ${typeLabel.toLowerCase()} hit can kill at endgame (pinnacle bosses, T16+ map mods)`
+          : `Risk of one-shot from ${typeLabel.toLowerCase()} hits when stacked with map mods`,
+    });
+  }
+  return recs;
+}
+
+function generateCurseMitigationRecommendations(
+  analysis: CurseMitigationAnalysis,
+  maxHits: MaxHitAnalysis
+): Recommendation[] {
+  const recs: Recommendation[] = [];
+  if (analysis.status !== 'baseline' && analysis.status !== 'amplified') return recs;
+
+  // Compound severity: low PhysMaxHit + Vulnerability fully landing is the
+  // documented retro #82 failure mode (MickaMirageHiero PhysMaxHit ~27k).
+  const physGapHighOrCritical = maxHits.gaps.some(
+    (g) => g.type === 'physical' && (g.severity === 'high' || g.severity === 'critical')
+  );
+  const priority: Recommendation['priority'] = physGapHighOrCritical ? 'high' : 'medium';
+
+  recs.push({
+    priority,
+    category: 'curse',
+    issue:
+      analysis.status === 'amplified'
+        ? `Curses on you are amplified (${analysis.curseEffectOnSelf}% effect)`
+        : `No anti-curse layer (curse effect on you is ${analysis.curseEffectOnSelf}% — baseline)`,
+    solutions: [
+      'Warding flask suffix removes curses on use; "of the Owl" / "of the Kakapo" suffixes reduce curse effect during flask effect',
+      'Atziri\'s Reflection shield grants Unaffected by Curses',
+      'Sublime Vision (Prismatic Jewel) — Zealotry variant grants Unaffected by Curses while affected by Zealotry',
+      'Curse and Chaos Resistance tree notable: 6% reduced Effect of Curses on you (also +6% chaos resistance)',
+    ],
+    impact: physGapHighOrCritical
+      ? `Vulnerability adds ~30-44% physical damage taken; with current physical max-hit ceiling this drops survivability into one-shot territory`
+      : 'Vulnerability adds ~30-44% physical damage taken; Temporal Chains, Enfeeble, Despair compound resistance/recovery problems',
+  });
+  return recs;
+}
+
 function generateSustainRecommendations(analysis: SustainAnalysis): Recommendation[] {
   const recs: Recommendation[] = [];
   if (analysis.overall === 'poor') {
@@ -577,13 +810,37 @@ function generateSustainRecommendations(analysis: SustainAnalysis): Recommendati
   return recs;
 }
 
-function calculateOverallScore(
-  resistances: ResistanceAnalysis,
-  lifePool: LifePoolAnalysis,
-  mitigation: MitigationAnalysis,
-  sustain: SustainAnalysis,
-  defensiveLayerCount: number
-): DefensiveAnalysis['overallScore'] {
+interface OverallScoreInput {
+  resistances: ResistanceAnalysis;
+  lifePool: LifePoolAnalysis;
+  mitigation: MitigationAnalysis;
+  sustain: SustainAnalysis;
+  defensiveLayerCount: number;
+  avoidance: AvoidanceAnalysis;
+  maxHits: MaxHitAnalysis;
+  curseMitigation: CurseMitigationAnalysis;
+}
+
+// Gap penalties: keep load-bearing missing layers from being masked
+// by 2-of-3 layer counts (retro #82). Each gap is independent.
+function gapIssues(input: OverallScoreInput): number {
+  let issues = 0;
+  const spellSupp = input.avoidance.spellSuppression;
+  const spellBlock = input.mitigation.spellBlock.value;
+  const spellDodge = input.avoidance.spellDodge;
+  if (spellSupp < 30 && spellBlock < 30 && spellDodge < 30) issues += 2;
+  for (const gap of input.maxHits.gaps) {
+    issues += gap.severity === 'critical' ? 3 : 2;
+  }
+  if (input.curseMitigation.status === 'baseline' || input.curseMitigation.status === 'amplified') {
+    issues += 1;
+  }
+  return issues;
+}
+
+function calculateOverallScore(input: OverallScoreInput): DefensiveAnalysis['overallScore'] {
+  const { resistances, lifePool, mitigation, sustain, defensiveLayerCount } = input;
+
   if (!resistances.allCapped || lifePool.status === 'critical') {
     return 'critical';
   }
@@ -598,6 +855,8 @@ function calculateOverallScore(
   if (resistances.chaos.status === 'dangerous') issues += 1;
   if (defensiveLayerCount < 2) issues += 2;
   if (defensiveLayerCount < 3) issues += 1;
+
+  issues += gapIssues(input);
 
   if (issues === 0) return 'excellent';
   if (issues <= 2) return 'good';
@@ -692,6 +951,37 @@ export function formatDefensiveAnalysis(analysis: DefensiveAnalysis): string {
     output += `ES Recharge: ${analysis.sustain.esRecharge.value}/s — ${analysis.sustain.esRecharge.status}\n`;
   }
   output += `Overall: ${analysis.sustain.overall}\n\n`;
+
+  // Max Hit Ceilings (single-hit survivability)
+  output += '**Max Hit Ceilings (per-hit survivability):**\n';
+  const mh = analysis.maxHits;
+  const mhMark = (type: MaxHitAnalysis['gaps'][number]['type'], value: number): string => {
+    if (value <= 0) return '?';
+    const gap = analysis.maxHits.gaps.find((g) => g.type === type);
+    if (!gap) return '✓';
+    return gap.severity === 'critical' ? '🚨' : '⚠';
+  };
+  output += `${mhMark('physical', mh.physical)} Physical: ${mh.physical.toLocaleString()}\n`;
+  output += `${mhMark('fire', mh.fire)} Fire: ${mh.fire.toLocaleString()}\n`;
+  output += `${mhMark('cold', mh.cold)} Cold: ${mh.cold.toLocaleString()}\n`;
+  output += `${mhMark('lightning', mh.lightning)} Lightning: ${mh.lightning.toLocaleString()}\n`;
+  output += `${mhMark('chaos', mh.chaos)} Chaos: ${mh.chaos.toLocaleString()}\n\n`;
+
+  // Curse Mitigation
+  output += '**Curse Mitigation:**\n';
+  let curseIcon: string;
+  if (analysis.curseMitigation.status === 'immune' || analysis.curseMitigation.status === 'reduced') {
+    curseIcon = '✓';
+  } else if (analysis.curseMitigation.status === 'amplified') {
+    curseIcon = '🚨';
+  } else if (analysis.curseMitigation.status === 'unknown') {
+    curseIcon = '?';
+  } else {
+    curseIcon = '⚠';
+  }
+  const curseValue = analysis.curseMitigation.curseEffectOnSelf;
+  const curseValueLabel = curseValue === null ? 'not exposed by bridge' : `${curseValue}%`;
+  output += `${curseIcon} Curse Effect on you: ${curseValueLabel} (${analysis.curseMitigation.status})\n\n`;
 
   // Recommendations
   if (analysis.recommendations.length > 0) {
