@@ -114,8 +114,18 @@ export async function handleGetBuildIssues(context: BuildGoalsHandlerContext) {
     try {
       const items = await luaClient.getItems();
       if (Array.isArray(items)) {
-        // Find jewel slots that are empty (id === 0)
-        const jewelSlots = items.filter((it: any) => it.slot && /jewel/i.test(it.slot));
+        // PoB's get_items returns one slot per Socket-type node in the FULL tree,
+        // not just allocated sockets. Intersect 'Jewel <nodeId>' slots with the
+        // active spec's allocated nodes so unreachable sockets aren't counted.
+        const tree = await luaClient.getTree().catch(() => null);
+        const allocatedIds = new Set<number>(
+          Array.isArray(tree?.nodes) ? tree.nodes.map(Number) : []
+        );
+        const jewelSlots = items.filter((it: any) => {
+          if (typeof it?.slot !== 'string' || !it.slot.startsWith('Jewel ')) return false;
+          const nodeId = Number(it.slot.slice('Jewel '.length));
+          return Number.isFinite(nodeId) && allocatedIds.has(nodeId);
+        });
         const emptyJewelSlots = jewelSlots.filter((it: any) => !it.id || it.id === 0);
         if (emptyJewelSlots.length > 0) {
           issues.push({
