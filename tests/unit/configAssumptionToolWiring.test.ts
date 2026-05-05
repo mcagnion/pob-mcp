@@ -26,6 +26,7 @@ function makeContextBuilder() {
     buildTreeContext: jest.fn(() => ({})),
     buildLuaContext: jest.fn(() => ({})),
     buildItemSkillContext: jest.fn(() => ({})),
+    buildJewelHandlerContext: jest.fn(() => ({})),
     buildOptimizationContext: jest.fn(() => ({})),
     buildExportContext: jest.fn(() => ({})),
     buildSkillGemContext: jest.fn(() => ({})),
