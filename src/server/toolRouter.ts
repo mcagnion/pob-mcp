@@ -22,6 +22,7 @@ import { handleAddItem, handleGetEquippedItems, handleToggleFlask, handleGetSkil
 import { handleAnalyzeDefenses, handleSuggestOptimalNodes, handleOptimizeTree } from "../handlers/optimizationHandlers.js";
 import { handleAnalyzeItems, handleOptimizeSkillLinks, handleCreateBudgetBuild } from "../handlers/advancedOptimizationHandlers.js";
 import { handleGetConfig, handleSetConfig, handleSetEnemyStats, handleSaveConfigPreset, handleLoadConfigPreset, handleListConfigPresets } from "../handlers/configHandlers.js";
+import { handleAnalyzeConfigAssumptions } from "../handlers/configAssumptionHandlers.js";
 import { handleValidateBuild } from "../handlers/validationHandlers.js";
 import { handleExportBuild, handleSaveTree, handleSnapshotBuild, handleListSnapshots, handleRestoreSnapshot, handleExportBuildSummary } from "../handlers/exportHandlers.js";
 import { handleAnalyzeSkillLinks, handleSuggestSupportGems, handleCompareGemSetups, handleValidateGemQuality, handleFindOptimalLinks, handleGemUpgradePath } from "../handlers/skillGemHandlers.js";
@@ -232,6 +233,16 @@ export async function routeToolCall(
         ensureLuaClient: deps.ensureLuaClient,
       };
       return await handleGetConfig(getConfigContext);
+
+    case "analyze_config_assumptions": {
+      const analyzeConfigContext = {
+        getLuaClient: deps.getLuaClient,
+        ensureLuaClient: deps.ensureLuaClient,
+      };
+      return await handleAnalyzeConfigAssumptions(analyzeConfigContext, {
+        profile: args?.profile,
+      });
+    }
 
     case "set_config":
       if (!args) throw new Error("Missing arguments");

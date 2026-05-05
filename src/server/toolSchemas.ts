@@ -940,6 +940,21 @@ export function getConfigToolSchemas(): any[] {
       },
     },
     {
+      name: "analyze_config_assumptions",
+      description: "Analyze active PoB configuration assumptions for the loaded build. Reports conditional or optimistic assumptions such as active flasks, charges, enemy conditions, custom mods, and detectable Vaal/guard skills without mutating the build.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          profile: {
+            type: "string",
+            description: "Scenario profile for severity weighting. Supported values: sc_trade_mapping, hc_trade_bossing.",
+            enum: ["sc_trade_mapping", "hc_trade_bossing"],
+            default: "sc_trade_mapping",
+          },
+        },
+      },
+    },
+    {
       name: "set_config",
       description: "Modify configuration inputs. Common keys — Charges: usePowerCharges, useFrenzyCharges, useEnduranceCharges | Conditions: conditionFortify, conditionLeeching, conditionOnFullLife, conditionOnFullEnergyShield | Buffs: buffOnslaught | Enemy: enemyIsBoss ('Shaper'/'Pinnacle'/false), enemyLevel | Build: bandit ('None'/'Oak'/'Alira'/'Kraityn'), pantheonMajorGod, pantheonMinorGod. Call get_config to see all current values.",
       inputSchema: {
