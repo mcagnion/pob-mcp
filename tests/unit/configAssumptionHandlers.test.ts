@@ -8,7 +8,6 @@ function makeLuaClient(overrides: Record<string, any> = {}) {
       usePowerCharges: false,
       useFrenzyCharges: false,
       useEnduranceCharges: false,
-      useSiphoningCharges: false,
       ...overrides.config,
     }),
     getItems: jest.fn<() => Promise<any[]>>().mockResolvedValue(overrides.items ?? []),
@@ -195,7 +194,43 @@ describe('handleAnalyzeConfigAssumptions', () => {
       expect.arrayContaining([
         expect.objectContaining({ id: 'charges.useFrenzyCharges.missing' }),
         expect.objectContaining({ id: 'charges.useEnduranceCharges.missing' }),
+      ])
+    );
+    expect(output.unknowns).not.toEqual(
+      expect.arrayContaining([
         expect.objectContaining({ id: 'charges.useSiphoningCharges.missing' }),
+      ])
+    );
+  });
+
+  it('does not require optional Siphoning charge config but reports it when exposed', async () => {
+    const absent = await analyze({
+      config: {
+        usePowerCharges: false,
+        useFrenzyCharges: false,
+        useEnduranceCharges: false,
+      },
+    }, 'hc_trade_bossing');
+
+    expect(absent.output.unknowns).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'charges.useSiphoningCharges.missing' }),
+      ])
+    );
+
+    const present = await analyze({
+      config: {
+        useSiphoningCharges: true,
+      },
+    }, 'hc_trade_bossing');
+
+    expect(present.output.assumptions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'charges.useSiphoningCharges.enabled',
+          evidence: ['useSiphoningCharges=true'],
+          severity: 'warning',
+        }),
       ])
     );
   });

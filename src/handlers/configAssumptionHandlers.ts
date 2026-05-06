@@ -52,11 +52,11 @@ interface DataResult<T> {
   error?: string;
 }
 
-const CHARGE_KEYS = [
-  ["usePowerCharges", "Power charges"],
-  ["useFrenzyCharges", "Frenzy charges"],
-  ["useEnduranceCharges", "Endurance charges"],
-  ["useSiphoningCharges", "Siphoning charges"],
+const CHARGE_CONFIGS = [
+  { key: "usePowerCharges", label: "Power charges", required: true },
+  { key: "useFrenzyCharges", label: "Frenzy charges", required: true },
+  { key: "useEnduranceCharges", label: "Endurance charges", required: true },
+  { key: "useSiphoningCharges", label: "Siphoning charges", required: false },
 ] as const;
 
 const GUARD_SKILLS = [
@@ -201,13 +201,15 @@ function appendChargeFindings(
   config: Record<string, unknown>,
   severityFor: (category: AssumptionCategory) => AssumptionSeverity
 ) {
-  for (const [key, label] of CHARGE_KEYS) {
+  for (const { key, label, required } of CHARGE_CONFIGS) {
     if (!(key in config)) {
-      unknowns.push({
-        id: `charges.${key}.missing`,
-        name: label,
-        reason: `${key} was not present in getConfig output.`,
-      });
+      if (required) {
+        unknowns.push({
+          id: `charges.${key}.missing`,
+          name: label,
+          reason: `${key} was not present in getConfig output.`,
+        });
+      }
       continue;
     }
 
