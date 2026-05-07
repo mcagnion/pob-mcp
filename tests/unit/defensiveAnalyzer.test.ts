@@ -136,14 +136,14 @@ describe('analyzeDefenses — gap detectors (retro #82)', () => {
       // Items removed in earlier rounds (must stay removed)
       expect(allText).not.toContain('Cyclopean Coil'); // belt with ailment immunity, NOT spell dodge
 
-      // Stone of Lazhwar is spell BLOCK, not spell DODGE — must appear under
-      // the Spell Block bullet, never the Spell Dodge bullet.
+      // Stone of Lazhwar is spell BLOCK, and spell-hit advice must not route
+      // users toward stale Acrobatics / spell-dodge wording.
       const blockText = rec!.solutions.find((s) => s.startsWith('Spell Block:'));
-      const dodgeText = rec!.solutions.find((s) => s.startsWith('Spell Dodge:'));
       expect(blockText).toBeDefined();
-      expect(dodgeText).toBeDefined();
       expect(blockText!).toContain('Stone of Lazhwar');
-      expect(dodgeText!).not.toContain('Stone of Lazhwar');
+      expect(allText).not.toMatch(/Spell Dodge:/);
+      expect(allText).not.toContain('Acrobatics');
+      expect(allText).not.toContain('converts Spell Suppression Chance');
 
       // Phase Acrobatics is removed from the tree in current PoE1; advice
       // must not cite it.
@@ -152,7 +152,9 @@ describe('analyzeDefenses — gap detectors (retro #82)', () => {
       // Suppression wording must reflect chance + per-hit half-damage.
       const suppText = rec!.solutions.find((s) => s.startsWith('Spell Suppression:'));
       expect(suppText).toBeDefined();
-      expect(suppText!).toMatch(/each suppressed hit/i);
+      expect(suppText!).toContain('Suppression Chance');
+      expect(suppText!).toContain('50% damage');
+      expect(suppText!).not.toMatch(/\bdodge\b/i);
     });
   });
 
@@ -227,10 +229,10 @@ describe('analyzeDefenses — gap detectors (retro #82)', () => {
       // Granite + Basalt are real flasks — at least one solution line must
       // name them as the flask choice.
       expect(allSolutions).toMatch(/Granite|Basalt/);
-      // Granite Flask "+1500 to Armour" and Basalt Flask "20% more Armour"
-      // (verified flask.lua:280-326) — they ramp armour, NOT flat phys
-      // damage reduction.
+      // Keep exact flask magnitudes out unless they are source-verified for
+      // the current game data snapshot.
       const flaskLine = rec!.solutions.find((s) => /Granite|Basalt/.test(s)) || '';
+      expect(flaskLine).not.toMatch(/\+1500|20% more Armour|15% physical/i);
       expect(flaskLine).not.toMatch(/flat phys reduction|flat physical reduction/i);
       expect(flaskLine).toMatch(/[Aa]rmour|[Mm]itigation/);
       // Lightning Coil and Cloak of Flame remain valid as body-armour redirect
@@ -316,6 +318,56 @@ describe('analyzeDefenses — gap detectors (retro #82)', () => {
 
       // Verified anti-curse sources MUST appear (at least one).
       expect(allText).toMatch(/Warding|Atziri's Reflection|Sublime Vision|Curse and Chaos Resistance/);
+    });
+  });
+
+  describe('avoidance recommendation text', () => {
+    it('does not recommend stale generic dodge or old Acrobatics wording', () => {
+      const stats = {
+        ...healthyStats(),
+        Evasion: 0,
+        EffectiveSpellSuppressionChance: 0,
+        SpellSuppressionChance: 0,
+        DodgeChance: 0,
+        SpellDodgeChance: 0,
+        BlockChance: 0,
+        SpellBlockChance: 0,
+      };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'avoidance', 'No significant avoidance');
+
+      expect(rec).toBeDefined();
+      const solutionText = rec!.solutions.join(' ');
+      expect(solutionText).toContain('each suppressed hit takes 50% damage');
+      expect(solutionText).toContain('Suppression Chance');
+      expect(solutionText).not.toContain('Acrobatics keystone gives 30% attack/spell dodge');
+      expect(solutionText).not.toMatch(/\bDodge:/);
+    });
+
+    it('defensive layer advice does not list generic dodge as a new avoidance target', () => {
+      const stats = {
+        ...healthyStats(),
+        Evasion: 0,
+        EffectiveSpellSuppressionChance: 0,
+        SpellSuppressionChance: 0,
+        DodgeChance: 0,
+        SpellDodgeChance: 0,
+        BlockChance: 0,
+        SpellBlockChance: 0,
+        PhysicalDamageReduction: 0,
+        EnduranceChargesMax: 0,
+        Armour: 0,
+        LifeRegen: 0,
+        LifeLeechGainRate: 0,
+        ESRecharge: 0,
+      };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'layers', 'defensive layers active');
+
+      expect(rec).toBeDefined();
+      const solutionText = rec!.solutions.join(' ');
+      expect(solutionText).toContain('Avoidance: add evasion, spell suppression, or block');
+      expect(solutionText).not.toMatch(/\bdodge\b/i);
     });
   });
 
