@@ -1,5 +1,15 @@
-import { describe, expect, it, jest } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { handleFindWeightedTradeItems } from '../../src/handlers/tradeHandlers.js';
+
+const originalPoeSessionId = process.env.POE_SESSION_ID;
+
+afterEach(() => {
+  if (originalPoeSessionId === undefined) {
+    delete process.env.POE_SESSION_ID;
+  } else {
+    process.env.POE_SESSION_ID = originalPoeSessionId;
+  }
+});
 
 function createContext(opts: {
   generateResult?: unknown;
@@ -101,6 +111,32 @@ function buildListing(opts: {
   };
 }
 
+function weightedFilter(id: string, weight?: number) {
+  return weight === undefined ? { id } : { id, value: { weight } };
+}
+
+function buildWeightedQuery(filters: unknown[], category = 'accessory.belt') {
+  return {
+    query: {
+      filters: {
+        type_filters: {
+          filters: {
+            category: { option: category },
+          },
+        },
+      },
+      stats: [
+        {
+          type: 'weight',
+          filters,
+        },
+      ],
+    },
+    sort: { 'statgroup.0': 'desc' },
+    engine: 'new',
+  };
+}
+
 describe('handleFindWeightedTradeItems', () => {
   it("rejects Watcher's Eye as a slot name before calling PoB", async () => {
     const { context, luaClient, tradeClient } = createContext();
@@ -134,6 +170,13 @@ describe('handleFindWeightedTradeItems', () => {
   it('strips PoB statgroup sort to a JSON-API-supported sort before calling /search', async () => {
     const pobQuery = {
       query: {
+        filters: {
+          type_filters: {
+            filters: {
+              category: { option: 'accessory.belt' },
+            },
+          },
+        },
         stats: [
           {
             type: 'weight',
@@ -157,6 +200,8 @@ describe('handleFindWeightedTradeItems', () => {
     });
     expect(result.content[0].text).toContain('No items found');
     expect(result.content[0].text).toContain('Query had 1 weighted mods');
+    expect(result.content[0].text).toContain('Query shape: category=accessory.belt');
+    expect(result.content[0].text).toContain('Weighted filters: 1 total, first weighted group: 1');
   });
 
   it('labels unknown PoB slots as slot resolution failures', async () => {
@@ -203,6 +248,108 @@ describe('handleFindWeightedTradeItems', () => {
         slot: 'Belt',
       }),
     ).rejects.toThrow(/trade API query failed for slot "Belt": rate limited/);
+  });
+
+  it('surfaces POE_SESSION_ID diagnostics for anonymous weighted query-too-complex failures without retrying', async () => {
+    delete process.env.POE_SESSION_ID;
+    const pobQuery = buildWeightedQuery([
+      weightedFilter('explicit.stat_life', 1),
+      weightedFilter('explicit.stat_resistance', 0.5),
+    ]);
+    const { context, tradeClient, luaClient } = createContext({
+      generateResult: { query: pobQuery },
+    });
+    tradeClient.searchItems.mockRejectedValue(new Error('Query is too complex') as never);
+
+    await expect(
+      handleFindWeightedTradeItems(context, {
+        league: 'Standard',
+        slot: 'Belt',
+      }),
+    ).rejects.toThrow(/POE_SESSION_ID/);
+
+    expect(tradeClient.searchItems).toHaveBeenCalledTimes(1);
+    expect(luaClient.rankTradeResults).not.toHaveBeenCalled();
+  });
+
+  it('retries authenticated query-too-complex failures with top absolute weighted filters', async () => {
+    process.env.POE_SESSION_ID = 'test-session';
+    const pobQuery = buildWeightedQuery([
+      weightedFilter('positive_medium', 1.5),
+      weightedFilter('negative_large', -2.0),
+      weightedFilter('missing_weight'),
+      ...Array.from({ length: 19 }, (_, i) => weightedFilter(`high_${i}`, 3 + i)),
+    ]);
+    const fetched = [
+      buildListing({
+        id: 'a',
+        name: 'Fallback Belt',
+        typeLine: 'Heavy Belt',
+        itemText: 'Item Class: Belts\nRarity: Rare\nFallback Belt\nHeavy Belt\n',
+        priceAmount: 10,
+      }),
+    ];
+    const { context, tradeClient, luaClient } = createContext({
+      generateResult: { query: pobQuery },
+      fetchedItems: fetched,
+      rankResult: {
+        ranked: [{ index: 1, weight: 0.2, deltas: { FullDPS: 100 } }],
+        sortMode: 'StatValue',
+      },
+    });
+    tradeClient.searchItems
+      .mockRejectedValueOnce(new Error('Query is too complex') as never)
+      .mockResolvedValueOnce({ id: 'fallback-search', total: 1, result: ['a'] } as never);
+
+    const result = await handleFindWeightedTradeItems(context, {
+      league: 'Standard',
+      slot: 'Belt',
+    });
+
+    expect(tradeClient.searchItems).toHaveBeenCalledTimes(2);
+    const fallbackQuery: any = tradeClient.searchItems.mock.calls[1]?.[1];
+    const fallbackFilters = fallbackQuery.query.stats[0].filters;
+    const fallbackIds = fallbackFilters.map((filter: any) => filter.id);
+    expect(fallbackFilters).toHaveLength(20);
+    expect(fallbackIds).toContain('negative_large');
+    expect(fallbackIds).not.toContain('positive_medium');
+    expect(fallbackIds).not.toContain('missing_weight');
+    expect(fallbackQuery.sort).toEqual({ price: 'asc' });
+    expect(luaClient.rankTradeResults).toHaveBeenCalledTimes(1);
+    expect(result.content[0].text).toContain('retried with top 20 of 22 weighted filters');
+    expect(result.content[0].text).toContain('Candidate pool is a narrowed subset');
+  });
+
+  it('reports original and fallback diagnostics when the top-N retry also fails', async () => {
+    process.env.POE_SESSION_ID = 'test-session';
+    const pobQuery = buildWeightedQuery(
+      Array.from({ length: 21 }, (_, i) => weightedFilter(`stat_${i}`, i + 1)),
+      'accessory.ring',
+    );
+    const { context, tradeClient, luaClient } = createContext({
+      generateResult: { query: pobQuery },
+    });
+    tradeClient.searchItems
+      .mockRejectedValueOnce(new Error('Query is too complex') as never)
+      .mockRejectedValueOnce(new Error('Query is too complex after fallback') as never);
+
+    let thrown: Error | undefined;
+    try {
+      await handleFindWeightedTradeItems(context, {
+        league: 'Standard',
+        slot: 'Ring 1',
+      });
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    expect(thrown?.message).toContain('Top-N fallback also failed');
+    expect(thrown?.message).toContain('keeping 20 of 21 weighted filters');
+    expect(thrown?.message).toContain('Original diagnostics');
+    expect(thrown?.message).toContain('Fallback diagnostics');
+    expect(thrown?.message).toContain('category=accessory.ring');
+    expect(tradeClient.searchItems).toHaveBeenCalledTimes(2);
+    expect(luaClient.rankTradeResults).not.toHaveBeenCalled();
   });
 
   it('passes decoded item_strings + sortMode to PoB ranking and reorders output by ranked order', async () => {
