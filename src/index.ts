@@ -33,6 +33,7 @@ import type {
 
 // Import utilities
 import { ContextBuilder } from "./utils/contextBuilder.js";
+import { formatPoeSessionIdDiagnostic } from "./utils/poeSessionDiagnostics.js";
 
 // Import server modules
 import { ToolGate } from "./server/toolGate.js";
@@ -120,6 +121,7 @@ class PoBMCPServer {
     } else {
       console.error('[Trade API] Disabled (set POE_TRADE_ENABLED=true to enable)');
     }
+    console.error(`[Trade API] ${formatPoeSessionIdDiagnostic()}`);
 
     // Initialize server modules
     this.toolGate = new ToolGate();

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { handleFindWeightedTradeItems } from '../../src/handlers/tradeHandlers.js';
+import { formatPoeSessionIdDiagnostic } from '../../src/utils/poeSessionDiagnostics.js';
 
 const originalPoeSessionId = process.env.POE_SESSION_ID;
 
@@ -137,6 +138,23 @@ function buildWeightedQuery(filters: unknown[], category = 'accessory.belt') {
   };
 }
 
+describe('formatPoeSessionIdDiagnostic', () => {
+  it('reports absent session without a fingerprint', () => {
+    delete process.env.POE_SESSION_ID;
+    expect(formatPoeSessionIdDiagnostic()).toBe('POE_SESSION_ID configured: no');
+  });
+
+  it('reports a redacted session fingerprint without leaking the full value', () => {
+    const fullSessionId = 'abcd1234efgh5678ijkl9012mnop3456';
+    const diagnostic = formatPoeSessionIdDiagnostic(fullSessionId);
+
+    expect(diagnostic).toContain('POE_SESSION_ID configured: yes');
+    expect(diagnostic).toContain('length=32');
+    expect(diagnostic).toContain('fingerprint=abcd...3456');
+    expect(diagnostic).not.toContain(fullSessionId);
+  });
+});
+
 describe('handleFindWeightedTradeItems', () => {
   it("rejects Watcher's Eye as a slot name before calling PoB", async () => {
     const { context, luaClient, tradeClient } = createContext();
@@ -202,6 +220,26 @@ describe('handleFindWeightedTradeItems', () => {
     expect(result.content[0].text).toContain('Query had 1 weighted mods');
     expect(result.content[0].text).toContain('Query shape: category=accessory.belt');
     expect(result.content[0].text).toContain('Weighted filters: 1 total, first weighted group: 1');
+  });
+
+  it('surfaces the sanitized POE_SESSION_ID diagnostic without leaking the full value', async () => {
+    const fullSessionId = 'abcd1234efgh5678ijkl9012mnop3456';
+    process.env.POE_SESSION_ID = fullSessionId;
+    const pobQuery = buildWeightedQuery(
+      [{ id: 'explicit.stat_123', value: { weight: 1.5 } }],
+      'accessory.belt',
+    );
+    const { context } = createContext({ generateResult: { query: pobQuery } });
+
+    const result = await handleFindWeightedTradeItems(context, {
+      league: 'Standard',
+      slot: 'Belt',
+    });
+
+    expect(result.content[0].text).toContain('POE_SESSION_ID configured: yes');
+    expect(result.content[0].text).toContain('length=32');
+    expect(result.content[0].text).toContain('fingerprint=abcd...3456');
+    expect(result.content[0].text).not.toContain(fullSessionId);
   });
 
   it("normalizes Watcher's Eye special into final query name/type/rarity constraints", async () => {
@@ -401,7 +439,8 @@ describe('handleFindWeightedTradeItems', () => {
   });
 
   it('reports original and per-cap fallback diagnostics when all retries fail', async () => {
-    process.env.POE_SESSION_ID = 'test-session';
+    const fullSessionId = 'abcd1234efgh5678ijkl9012mnop3456';
+    process.env.POE_SESSION_ID = fullSessionId;
     const pobQuery = buildWeightedQuery(
       Array.from({ length: 21 }, (_, i) => weightedFilter(`stat_${i}`, i + 1)),
       'accessory.ring',
@@ -429,6 +468,8 @@ describe('handleFindWeightedTradeItems', () => {
     expect(thrown?.message).toContain('cap 5: kept 5 of 21 weighted filters');
     expect(thrown?.message).toContain('Original diagnostics');
     expect(thrown?.message).toContain('Final fallback diagnostics');
+    expect(thrown?.message).toContain('fingerprint=abcd...3456');
+    expect(thrown?.message).not.toContain(fullSessionId);
     expect(thrown?.message).toContain('category=accessory.ring');
     expect(tradeClient.searchItems).toHaveBeenCalledTimes(5);
     expect(luaClient.rankTradeResults).not.toHaveBeenCalled();

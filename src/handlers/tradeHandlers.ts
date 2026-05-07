@@ -7,6 +7,7 @@ import { ItemListing, SearchOptions, ItemRecommendation, ResistanceRequirements,
 import { CostBenefitAnalyzer } from '../services/costBenefitAnalyzer.js';
 import { PoeNinjaClient } from '../services/poeNinjaClient.js';
 import type { PoBLuaApiClient } from '../pobLuaBridge.js';
+import { formatPoeSessionIdDiagnostic } from '../utils/poeSessionDiagnostics.js';
 
 interface TradeContext {
   tradeClient: TradeApiClient;
@@ -1503,6 +1504,8 @@ export async function handleFindWeightedTradeItems(
       );
     }
     const normalizedSlot = normalizeWeightedTradeSlot(slot);
+    const poeSessionDiagnostic = formatPoeSessionIdDiagnostic();
+    const sessionWarning = `POE trade session: ${poeSessionDiagnostic}.`;
 
     await context.ensureLuaClient();
     const luaClient = context.getLuaClient();
@@ -1546,7 +1549,10 @@ export async function handleFindWeightedTradeItems(
     } catch (error) {
       const originalErrorMessage = formatError(error);
       if (!isQueryTooComplexError(originalErrorMessage)) {
-        throw new Error(`trade API query failed for slot "${normalizedSlot}": ${originalErrorMessage}`);
+        throw new Error(
+          `trade API query failed for slot "${normalizedSlot}": ${originalErrorMessage}. ` +
+          `Session: ${poeSessionDiagnostic}.`
+        );
       }
 
       if (hasWeightedStatsGroup(apiQuery) && !process.env.POE_SESSION_ID) {
@@ -1555,6 +1561,7 @@ export async function handleFindWeightedTradeItems(
           'The query contains a type:"weight" stat group and POE_SESSION_ID is not configured; ' +
           'GGG rejects anonymous weighted-stat searches with "Query is too complex". ' +
           'Set POE_SESSION_ID before using find_weighted_trade_items. ' +
+          `Session: ${poeSessionDiagnostic}. ` +
           `Diagnostics: ${formatWeightedTradeQueryDiagnostics(apiQuery)}.`
         );
       }
@@ -1596,6 +1603,7 @@ export async function handleFindWeightedTradeItems(
         if (fallbackAttempts.length === 0) {
           throw new Error(
             `trade API query failed for slot "${normalizedSlot}": ${originalErrorMessage}. ` +
+            `Session: ${poeSessionDiagnostic}. ` +
             `No smaller top-N weighted retry was available (${formatWeightedTradeQueryDiagnostics(apiQuery)}).`
           );
         }
@@ -1607,16 +1615,20 @@ export async function handleFindWeightedTradeItems(
           `Attempted fallback caps: [${fallbackAttempts.map((attempt) => attempt.cap).join(', ')}]. ` +
           `Per-cap errors: ${fallbackAttempts.map(formatFallbackAttempt).join(' | ')}. ` +
           `Original diagnostics: ${formatWeightedTradeQueryDiagnostics(apiQuery)}. ` +
-          `Final fallback diagnostics: ${formatWeightedTradeQueryDiagnostics(lastAttempt.query)}.`
+          `Final fallback diagnostics: ${formatWeightedTradeQueryDiagnostics(lastAttempt.query)}. ` +
+          `Session: ${poeSessionDiagnostic}.`
         );
       }
     }
 
     if (!searchResult) {
-      throw new Error(`trade API query failed for slot "${normalizedSlot}": no search result returned`);
+      throw new Error(
+        `trade API query failed for slot "${normalizedSlot}": no search result returned. ` +
+        `Session: ${poeSessionDiagnostic}.`
+      );
     }
 
-    const warningText = [warning, ...optionWarnings, ...searchWarnings].filter((line): line is string => !!line);
+    const warningText = [warning, sessionWarning, ...optionWarnings, ...searchWarnings].filter((line): line is string => !!line);
 
     if (!searchResult.result || searchResult.result.length === 0) {
       const empty =
