@@ -204,6 +204,44 @@ describe('handleFindWeightedTradeItems', () => {
     expect(result.content[0].text).toContain('Weighted filters: 1 total, first weighted group: 1');
   });
 
+  it("normalizes Watcher's Eye special into final query name/type/rarity constraints", async () => {
+    const pobQuery = buildWeightedQuery(
+      [{ id: 'explicit.stat_123', value: { weight: 1.5 } }],
+      'jewel',
+    );
+    (pobQuery.query as any).name = 'Bad Name';
+    (pobQuery.query as any).type = 'Bad Type';
+    const { context, luaClient, tradeClient } = createContext({ generateResult: { query: pobQuery } });
+
+    const result = await handleFindWeightedTradeItems(context, {
+      league: 'Standard',
+      slot: 'Jewel 12613',
+      options: { special: { itemName: "Watcher's Eye" } },
+    });
+
+    expect(luaClient.generateWeightedTradeQuery).toHaveBeenCalledWith('Jewel 12613', undefined);
+    const postedQuery: any = tradeClient.searchItems.mock.calls[0]?.[1];
+    expect(postedQuery.query.name).toBe("Watcher's Eye");
+    expect(postedQuery.query.type).toBe('Prismatic Jewel');
+    expect(postedQuery.query.filters.type_filters.filters.rarity).toEqual({ option: 'unique' });
+    expect(postedQuery.query.filters.type_filters.filters.category).toEqual({ option: 'jewel' });
+    expect(result.content[0].text).toContain('constrained the final trade query to unique Watcher');
+  });
+
+  it('keeps PoB-supported Megalomaniac special passthrough unchanged', async () => {
+    const pobQuery = buildWeightedQuery([], 'jewel');
+    const { context, luaClient } = createContext({ generateResult: { query: pobQuery } });
+    const options = { special: { itemName: 'Megalomaniac' } };
+
+    await handleFindWeightedTradeItems(context, {
+      league: 'Standard',
+      slot: 'Jewel 29712',
+      options,
+    });
+
+    expect(luaClient.generateWeightedTradeQuery).toHaveBeenCalledWith('Jewel 29712', options);
+  });
+
   it('labels unknown PoB slots as slot resolution failures', async () => {
     const luaClient = {
       generateWeightedTradeQuery: jest
@@ -317,10 +355,52 @@ describe('handleFindWeightedTradeItems', () => {
     expect(fallbackQuery.sort).toEqual({ price: 'asc' });
     expect(luaClient.rankTradeResults).toHaveBeenCalledTimes(1);
     expect(result.content[0].text).toContain('retried with top 20 of 22 weighted filters');
+    expect(result.content[0].text).toContain('winning cap 20; attempted caps: [20]');
     expect(result.content[0].text).toContain('Candidate pool is a narrowed subset');
   });
 
-  it('reports original and fallback diagnostics when the top-N retry also fails', async () => {
+  it('continues query-too-complex fallback to the next smaller cap', async () => {
+    process.env.POE_SESSION_ID = 'test-session';
+    const pobQuery = buildWeightedQuery(
+      Array.from({ length: 22 }, (_, i) => weightedFilter(`stat_${i}`, i + 1)),
+      'accessory.ring',
+    );
+    const fetched = [
+      buildListing({
+        id: 'a',
+        name: 'Fallback Ring',
+        typeLine: 'Amethyst Ring',
+        itemText: 'Item Class: Rings\nRarity: Rare\nFallback Ring\nAmethyst Ring\n',
+        priceAmount: 10,
+      }),
+    ];
+    const { context, tradeClient } = createContext({
+      generateResult: { query: pobQuery },
+      fetchedItems: fetched,
+      rankResult: {
+        ranked: [{ index: 1, weight: 0.2, deltas: { FullDPS: 100 } }],
+        sortMode: 'StatValue',
+      },
+    });
+    tradeClient.searchItems
+      .mockRejectedValueOnce(new Error('Query is too complex') as never)
+      .mockRejectedValueOnce(new Error('Query is too complex at 20') as never)
+      .mockResolvedValueOnce({ id: 'fallback-search', total: 1, result: ['a'] } as never);
+
+    const result = await handleFindWeightedTradeItems(context, {
+      league: 'Standard',
+      slot: 'Ring 1',
+    });
+
+    expect(tradeClient.searchItems).toHaveBeenCalledTimes(3);
+    const cap20Query: any = tradeClient.searchItems.mock.calls[1]?.[1];
+    const cap15Query: any = tradeClient.searchItems.mock.calls[2]?.[1];
+    expect(cap20Query.query.stats[0].filters).toHaveLength(20);
+    expect(cap15Query.query.stats[0].filters).toHaveLength(15);
+    expect(result.content[0].text).toContain('winning cap 15; attempted caps: [20, 15]');
+  });
+
+  it('reports original and per-cap fallback diagnostics when all retries fail', async () => {
     process.env.POE_SESSION_ID = 'test-session';
     const pobQuery = buildWeightedQuery(
       Array.from({ length: 21 }, (_, i) => weightedFilter(`stat_${i}`, i + 1)),
@@ -329,9 +409,7 @@ describe('handleFindWeightedTradeItems', () => {
     const { context, tradeClient, luaClient } = createContext({
       generateResult: { query: pobQuery },
     });
-    tradeClient.searchItems
-      .mockRejectedValueOnce(new Error('Query is too complex') as never)
-      .mockRejectedValueOnce(new Error('Query is too complex after fallback') as never);
+    tradeClient.searchItems.mockRejectedValue(new Error('Query is too complex after fallback') as never);
 
     let thrown: Error | undefined;
     try {
@@ -343,13 +421,48 @@ describe('handleFindWeightedTradeItems', () => {
       thrown = error as Error;
     }
 
-    expect(thrown?.message).toContain('Top-N fallback also failed');
-    expect(thrown?.message).toContain('keeping 20 of 21 weighted filters');
+    expect(thrown?.message).toContain('All top-N weighted fallback caps failed');
+    expect(thrown?.message).toContain('Attempted fallback caps: [20, 15, 10, 5]');
+    expect(thrown?.message).toContain('cap 20: kept 20 of 21 weighted filters');
+    expect(thrown?.message).toContain('cap 15: kept 15 of 21 weighted filters');
+    expect(thrown?.message).toContain('cap 10: kept 10 of 21 weighted filters');
+    expect(thrown?.message).toContain('cap 5: kept 5 of 21 weighted filters');
     expect(thrown?.message).toContain('Original diagnostics');
-    expect(thrown?.message).toContain('Fallback diagnostics');
+    expect(thrown?.message).toContain('Final fallback diagnostics');
     expect(thrown?.message).toContain('category=accessory.ring');
-    expect(tradeClient.searchItems).toHaveBeenCalledTimes(2);
+    expect(tradeClient.searchItems).toHaveBeenCalledTimes(5);
     expect(luaClient.rankTradeResults).not.toHaveBeenCalled();
+  });
+
+  it('skips fallback caps that do not reduce the weighted filter count', async () => {
+    process.env.POE_SESSION_ID = 'test-session';
+    const pobQuery = buildWeightedQuery(
+      Array.from({ length: 12 }, (_, i) => weightedFilter(`stat_${i}`, i + 1)),
+      'accessory.ring',
+    );
+    const { context, tradeClient } = createContext({
+      generateResult: { query: pobQuery },
+    });
+    tradeClient.searchItems.mockRejectedValue(new Error('Query is too complex') as never);
+
+    let thrown: Error | undefined;
+    try {
+      await handleFindWeightedTradeItems(context, {
+        league: 'Standard',
+        slot: 'Ring 1',
+      });
+    } catch (error) {
+      thrown = error as Error;
+    }
+
+    expect(tradeClient.searchItems).toHaveBeenCalledTimes(3);
+    expect(thrown?.message).toContain('Attempted fallback caps: [10, 5]');
+    expect(thrown?.message).not.toContain('cap 20:');
+    expect(thrown?.message).not.toContain('cap 15:');
+    const cap10Query: any = tradeClient.searchItems.mock.calls[1]?.[1];
+    const cap5Query: any = tradeClient.searchItems.mock.calls[2]?.[1];
+    expect(cap10Query.query.stats[0].filters).toHaveLength(10);
+    expect(cap5Query.query.stats[0].filters).toHaveLength(5);
   });
 
   it('passes decoded item_strings + sortMode to PoB ranking and reorders output by ranked order', async () => {

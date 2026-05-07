@@ -33,7 +33,11 @@ type WeightedTradeQuery = Record<string, unknown> & {
 };
 
 const WEIGHTED_TRADE_SUPPORTED_SLOT_EXAMPLES = '"Belt", "Helmet", "Ring 1", or an exact PoB jewel slot name';
-const WEIGHTED_TRADE_QUERY_TOO_COMPLEX_FALLBACK_FILTERS = 20;
+// Bounded live retries: keep the existing top-20 behavior first, then reduce
+// on the same axis as PoB GUI's min-value halving fallback when GGG still
+// rejects the weighted query. If this still fails live, min-value halving is
+// the next adaptive strategy.
+const WEIGHTED_TRADE_QUERY_TOO_COMPLEX_FALLBACK_CAPS = [20, 15, 10, 5] as const;
 
 function normalizeWeightedTradeSlot(slot: string): string {
   const trimmed = slot.trim();
@@ -55,6 +59,87 @@ function normalizeWeightedTradeSlot(slot: string): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeSpecialItemName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[â€™`]/g, "'")
+    .replace(/\s+/g, ' ');
+}
+
+function ensureRecordField(parent: Record<string, unknown>, key: string): Record<string, unknown> {
+  const existing = parent[key];
+  if (isRecord(existing)) return existing;
+  const created: Record<string, unknown> = {};
+  parent[key] = created;
+  return created;
+}
+
+function withUniqueItemConstraint(
+  query: WeightedTradeQuery,
+  name: string,
+  type: string,
+): WeightedTradeQuery {
+  const constrained = cloneWeightedTradeQuery(query);
+  if (!isRecord(constrained.query)) {
+    constrained.query = {};
+  }
+
+  constrained.query.name = name;
+  constrained.query.type = type;
+
+  const filters = ensureRecordField(constrained.query, 'filters');
+  const typeFilters = ensureRecordField(filters, 'type_filters');
+  const typeFilterBody = ensureRecordField(typeFilters, 'filters');
+  typeFilterBody.rarity = { option: 'unique' };
+
+  return constrained;
+}
+
+const UNSUPPORTED_SPECIAL_NORMALIZERS: Record<string, {
+  normalizeQuery: (query: WeightedTradeQuery) => WeightedTradeQuery;
+  warning: string;
+}> = {
+  "watcher's eye": {
+    normalizeQuery: (query) => withUniqueItemConstraint(query, "Watcher's Eye", 'Prismatic Jewel'),
+    warning:
+      'PoB does not support Watcher\'s Eye as a weighted-query special item; ' +
+      'generated a normal jewel-slot weighted query and constrained the final trade query to unique Watcher\'s Eye.',
+  },
+};
+
+function prepareWeightedTradeOptions(options?: Record<string, unknown>): {
+  options?: Record<string, unknown>;
+  normalizeQuery?: (query: WeightedTradeQuery) => WeightedTradeQuery;
+  warning?: string;
+} {
+  const special = isRecord(options?.special) ? options?.special : undefined;
+  const itemName = special?.itemName;
+  if (typeof itemName !== 'string') {
+    return { options };
+  }
+
+  const unsupported = UNSUPPORTED_SPECIAL_NORMALIZERS[normalizeSpecialItemName(itemName)];
+  if (!unsupported) {
+    return { options };
+  }
+
+  const normalizedOptions: Record<string, unknown> = { ...(options ?? {}) };
+  const normalizedSpecial: Record<string, unknown> = { ...special };
+  delete normalizedSpecial.itemName;
+  if (Object.keys(normalizedSpecial).length > 0) {
+    normalizedOptions.special = normalizedSpecial;
+  } else {
+    delete normalizedOptions.special;
+  }
+
+  return {
+    options: Object.keys(normalizedOptions).length > 0 ? normalizedOptions : undefined,
+    normalizeQuery: unsupported.normalizeQuery,
+    warning: unsupported.warning,
+  };
 }
 
 function prepareWeightedTradeQueryForApi(query: WeightedTradeQuery): {
@@ -285,6 +370,19 @@ function buildTopWeightedFilterQuery(
     reducedWeightedFilterCount: rankedFilters.length,
     reduced: true,
   };
+}
+
+type WeightedFallbackAttempt = {
+  cap: number;
+  originalWeightedFilterCount: number;
+  reducedWeightedFilterCount: number;
+  query: WeightedTradeQuery;
+  error: string;
+};
+
+function formatFallbackAttempt(attempt: WeightedFallbackAttempt): string {
+  return `cap ${attempt.cap}: kept ${attempt.reducedWeightedFilterCount} of ` +
+    `${attempt.originalWeightedFilterCount} weighted filters; ${attempt.error}`;
 }
 
 function isQueryTooComplexError(message: string): boolean {
@@ -1410,10 +1508,12 @@ export async function handleFindWeightedTradeItems(
     const luaClient = context.getLuaClient();
     if (!luaClient) throw new Error('Lua client not initialized — load a build first');
 
+    const preparedOptions = prepareWeightedTradeOptions(options);
+    const optionWarnings = preparedOptions.warning ? [preparedOptions.warning] : [];
     let pobQuery: unknown;
     let warning: string | undefined;
     try {
-      const result = await luaClient.generateWeightedTradeQuery(normalizedSlot, options);
+      const result = await luaClient.generateWeightedTradeQuery(normalizedSlot, preparedOptions.options);
       pobQuery = result.query;
       warning = result.warning;
     } catch (error) {
@@ -1429,6 +1529,10 @@ export async function handleFindWeightedTradeItems(
 
     if (!pobQuery || typeof pobQuery !== 'object') {
       throw new Error(`PoB returned no query JSON${warning ? ` (${warning})` : ''}`);
+    }
+
+    if (preparedOptions.normalizeQuery) {
+      pobQuery = preparedOptions.normalizeQuery(pobQuery as WeightedTradeQuery);
     }
 
     const { query: apiQuery, warnings: prepareWarnings } = prepareWeightedTradeQueryForApi(
@@ -1455,42 +1559,64 @@ export async function handleFindWeightedTradeItems(
         );
       }
 
-      const fallback = buildTopWeightedFilterQuery(
-        apiQuery,
-        WEIGHTED_TRADE_QUERY_TOO_COMPLEX_FALLBACK_FILTERS,
-      );
-      if (!fallback.reduced) {
-        throw new Error(
-          `trade API query failed for slot "${normalizedSlot}": ${originalErrorMessage}. ` +
-          `No smaller top-N weighted retry was available (${formatWeightedTradeQueryDiagnostics(apiQuery)}).`
-        );
+      const fallbackAttempts: WeightedFallbackAttempt[] = [];
+      let fallbackSucceeded = false;
+      for (const cap of WEIGHTED_TRADE_QUERY_TOO_COMPLEX_FALLBACK_CAPS) {
+        const fallback = buildTopWeightedFilterQuery(apiQuery, cap);
+        if (!fallback.reduced) continue;
+
+        try {
+          searchResult = await context.tradeClient.searchItems(
+            league,
+            fallback.query as unknown as TradeQuery,
+          );
+          effectiveQuery = fallback.query;
+          fallbackSucceeded = true;
+          const triedCaps = [...fallbackAttempts.map((attempt) => attempt.cap), cap];
+          searchWarnings.push(
+            `Original GGG /search rejected the weighted query as too complex; retried with top ` +
+            `${fallback.reducedWeightedFilterCount} of ${fallback.originalWeightedFilterCount} ` +
+            `weighted filters (winning cap ${cap}; attempted caps: [${triedCaps.join(', ')}]). ` +
+            'Candidate pool is a narrowed subset of the original query intent; dropped filters were ' +
+            'lower-weight or unweighted, and local PoB ranking still re-ranks fetched candidates.'
+          );
+          break;
+        } catch (fallbackError) {
+          fallbackAttempts.push({
+            cap,
+            originalWeightedFilterCount: fallback.originalWeightedFilterCount,
+            reducedWeightedFilterCount: fallback.reducedWeightedFilterCount,
+            query: fallback.query,
+            error: formatError(fallbackError),
+          });
+        }
       }
 
-      try {
-        searchResult = await context.tradeClient.searchItems(
-          league,
-          fallback.query as unknown as TradeQuery,
-        );
-        effectiveQuery = fallback.query;
-        searchWarnings.push(
-          `Original GGG /search rejected the weighted query as too complex; retried with top ` +
-          `${fallback.reducedWeightedFilterCount} of ${fallback.originalWeightedFilterCount} ` +
-          'weighted filters. Candidate pool is a narrowed subset of the original query intent; ' +
-          'dropped filters were lower-weight or unweighted, and local PoB ranking still re-ranks fetched candidates.'
-        );
-      } catch (fallbackError) {
+      if (!fallbackSucceeded) {
+        if (fallbackAttempts.length === 0) {
+          throw new Error(
+            `trade API query failed for slot "${normalizedSlot}": ${originalErrorMessage}. ` +
+            `No smaller top-N weighted retry was available (${formatWeightedTradeQueryDiagnostics(apiQuery)}).`
+          );
+        }
+
+        const lastAttempt = fallbackAttempts[fallbackAttempts.length - 1];
         throw new Error(
           `trade API query failed for slot "${normalizedSlot}": original /search failed: ` +
-          `${originalErrorMessage}. Top-N fallback also failed after keeping ` +
-          `${fallback.reducedWeightedFilterCount} of ${fallback.originalWeightedFilterCount} ` +
-          `weighted filters: ${formatError(fallbackError)}. ` +
+          `${originalErrorMessage}. All top-N weighted fallback caps failed. ` +
+          `Attempted fallback caps: [${fallbackAttempts.map((attempt) => attempt.cap).join(', ')}]. ` +
+          `Per-cap errors: ${fallbackAttempts.map(formatFallbackAttempt).join(' | ')}. ` +
           `Original diagnostics: ${formatWeightedTradeQueryDiagnostics(apiQuery)}. ` +
-          `Fallback diagnostics: ${formatWeightedTradeQueryDiagnostics(fallback.query)}.`
+          `Final fallback diagnostics: ${formatWeightedTradeQueryDiagnostics(lastAttempt.query)}.`
         );
       }
     }
 
-    const warningText = [warning, ...searchWarnings].filter((line): line is string => !!line);
+    if (!searchResult) {
+      throw new Error(`trade API query failed for slot "${normalizedSlot}": no search result returned`);
+    }
+
+    const warningText = [warning, ...optionWarnings, ...searchWarnings].filter((line): line is string => !!line);
 
     if (!searchResult.result || searchResult.result.length === 0) {
       const empty =
