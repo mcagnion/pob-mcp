@@ -505,6 +505,49 @@ async setTree(params: {
     return { query: parsed, warning: typeof res.warning === "string" ? res.warning : undefined };
   }
 
+  /**
+   * Rank a list of fetched trade items by their measured impact on the loaded build.
+   * Delegates to PoB's calcsTab miscCalculator + TradeQueryGenerator.WeightedRatioOutputs,
+   * the same pair the GUI's Trade tab uses (TradeQuery.SortFetchResults).
+   *
+   * sortMode:
+   *  - "StatValue" (default): highest weighted-impact first
+   *  - "StatValuePrice": weighted-impact divided by chaos-equivalent price (best per chaos)
+   *  - "Price": chaos-equivalent ascending (cheapest first)
+   *  - "Weight": preserve input order (caller's server-side ordering)
+   *
+   * StatValuePrice and Price both downgrade to StatValue when any candidate
+   * lacks a positive `price.chaos`; the response's `sortMode` field reflects
+   * the actual sort that ran.
+   */
+  async rankTradeResults(params: {
+    slot: string;
+    items: Array<{ item_string: string; price?: { amount?: number; currency?: string; chaos?: number } }>;
+    sortMode?: "StatValue" | "StatValuePrice" | "Price" | "Weight";
+    statWeights?: Array<{ stat: string; label?: string; weightMult: number }>;
+    stripEnchants?: boolean;
+  }): Promise<{
+    ranked: Array<{
+      index: number;
+      weight: number;
+      deltas: Record<string, number>;
+      price?: { amount?: number; currency?: string; chaos?: number };
+      statValuePerPrice?: number;
+      error?: string;
+    }>;
+    sortMode: string;
+  }> {
+    const res = await this.send({
+      action: "rank_trade_results",
+      params,
+    });
+    if (!res.ok) throw new Error(res.error || "rank_trade_results failed");
+    return {
+      ranked: (res.ranked as never) || [],
+      sortMode: typeof res.sortMode === "string" ? res.sortMode : (params.sortMode || "StatValue"),
+    };
+  }
+
   async stop(): Promise<void> {
     if (!this.proc) return;
     try {
