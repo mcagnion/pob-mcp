@@ -3,7 +3,7 @@
  *
  * Evaluates builds against the three-layer defensive framework:
  *   1. Avoidance  — not getting hit or not taking full hits
- *      (evasion, spell suppression, dodge, block)
+ *      (evasion, spell suppression, spell dodge when exposed by PoB, block)
  *   2. Mitigation — reducing damage when you do get hit
  *      (armour/PDR, endurance charges, elemental resists)
  *   3. Recovery   — healing back up after damage
@@ -169,7 +169,7 @@ export function analyzeDefenses(stats: Record<string, any>): DefensiveAnalysis {
       category: 'layers',
       issue: `Only ${defensiveLayerCount} of 3 defensive layers active (avoidance / mitigation / recovery)`,
       solutions: [
-        'Avoidance: add evasion, spell suppression (50%), dodge, or block',
+        'Avoidance: add evasion, spell suppression, or block',
         'Mitigation: add armour (Determination aura), endurance charges, or physical reduction',
         'Recovery: add life regeneration, life leech, or gain-on-hit',
       ],
@@ -283,7 +283,7 @@ function analyzeLifePool(stats: Record<string, any>): LifePoolAnalysis {
  * Analyze avoidance layer:
  *   - Spell suppression (50%+ = full cap)
  *   - Evasion (gives % chance to evade attacks)
- *   - Dodge (attack/spell dodge)
+ *   - Spell dodge when exposed by PoB
  *   - Block
  */
 function analyzeAvoidance(stats: Record<string, any>): AvoidanceAnalysis {
@@ -317,7 +317,7 @@ function analyzeAvoidance(stats: Record<string, any>): AvoidanceAnalysis {
   // A meaningful avoidance layer means at least one solid avoidance mechanic:
   //   - 50% spell suppression (full cap)
   //   - OR evasion giving ≥30% evade chance
-  //   - OR dodge/spell dodge ≥30%
+  //   - OR spell dodge ≥30%
   //   - OR block ≥30%
   const hasSignificantAvoidance =
     spellSuppression >= 50 ||
@@ -609,12 +609,11 @@ function generateAvoidanceRecommendations(analysis: AvoidanceAnalysis): Recommen
     recs.push({
       priority: 'medium',
       category: 'avoidance',
-      issue: 'No significant avoidance layer (no evasion, spell suppression, dodge, or block)',
+      issue: 'No significant avoidance layer (no evasion, spell suppression, or block)',
       solutions: [
         'Evasion: equip evasion-based armour and run Grace aura',
-        'Spell Suppression: 50% suppression halves spell damage taken — available on tree (Shadow/Ranger side)',
+        'Spell Suppression: each suppressed hit takes 50% damage; raise Suppression Chance with tree and gear',
         'Block: use a shield or staff and invest in block nodes',
-        'Dodge: Acrobatics keystone gives 30% attack/spell dodge (but disables block)',
       ],
       impact: 'Without avoidance, every hit lands at full effect — requires pure mitigation + recovery to survive',
     });
@@ -691,7 +690,6 @@ function generateSpellDefenseGapRecommendations(
     solutions: [
       'Spell Suppression: each suppressed hit takes 50% damage; Suppression Chance caps at 100% (50% is the practical endgame floor) — clusters on Shadow/Ranger tree side',
       'Spell Block: Aegis Aurora shield, Stone of Lazhwar amulet, Glancing Blows keystone (doubles block chance, 65% damage taken from blocked hits)',
-      'Spell Dodge: Acrobatics keystone converts Spell Suppression Chance to Spell Dodge at 50% efficiency (cap 75% spell dodge)',
     ],
     impact: 'Spell hits land at full damage without spell-specific defense; attack BlockChance and Evasion do NOT mitigate spells',
   });
@@ -703,7 +701,7 @@ function maxHitSolutions(type: MaxHitAnalysis['gaps'][number]['type']): string[]
     return [
       'Stack armour + endurance charges (Determination aura, Molten Shell guard skill, Immortal Call guard skill)',
       'Cap physical damage reduction (90% via tempering + endurance charges + flasks)',
-      'Granite flask (+1500 Armour) or Basalt flask (20% more Armour) ramps armour-based physical mitigation during effect',
+      'Granite or Basalt flask improves physical-hit mitigation during effect',
       'Lightning Coil or Cloak of Flame body armour redirects a fraction of physical damage to elements',
     ];
   }
