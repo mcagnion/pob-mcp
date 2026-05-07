@@ -20,20 +20,16 @@ interface WeightedTradeContext extends TradeContext {
   ensureLuaClient: () => Promise<void>;
 }
 
-type WeightedTradeStatsGroup = Record<string, unknown> & {
-  type?: unknown;
-  filters?: unknown[];
-};
-
 type WeightedTradeQuery = Record<string, unknown> & {
   sort?: Record<string, unknown>;
-  query?: Record<string, unknown> & {
-    stats?: WeightedTradeStatsGroup[];
+  query?: {
+    stats?: Array<{
+      filters?: unknown[];
+    }>;
   };
 };
 
 const WEIGHTED_TRADE_SUPPORTED_SLOT_EXAMPLES = '"Belt", "Helmet", "Ring 1", or an exact PoB jewel slot name';
-const WEIGHTED_TRADE_QUERY_TOO_COMPLEX_FALLBACK_FILTERS = 20;
 
 function normalizeWeightedTradeSlot(slot: string): string {
   const trimmed = slot.trim();
@@ -86,209 +82,8 @@ function prepareWeightedTradeQueryForApi(query: WeightedTradeQuery): {
   };
 }
 
-function isWeightedStatsGroup(group: unknown): group is WeightedTradeStatsGroup & { filters: unknown[] } {
-  return isRecord(group) && group.type === 'weight' && Array.isArray(group.filters);
-}
-
-function getWeightedFilterCounts(query: WeightedTradeQuery): {
-  statsKnown: boolean;
-  weightedGroupCount: number;
-  totalWeightedFilters: number;
-  firstWeightedGroupFilters: number | null;
-} {
-  const stats = query.query?.stats;
-  if (!Array.isArray(stats)) {
-    return {
-      statsKnown: false,
-      weightedGroupCount: 0,
-      totalWeightedFilters: 0,
-      firstWeightedGroupFilters: null,
-    };
-  }
-
-  let weightedGroupCount = 0;
-  let totalWeightedFilters = 0;
-  let firstWeightedGroupFilters: number | null = null;
-  for (const group of stats) {
-    if (!isWeightedStatsGroup(group)) continue;
-    weightedGroupCount += 1;
-    totalWeightedFilters += group.filters.length;
-    if (firstWeightedGroupFilters === null) {
-      firstWeightedGroupFilters = group.filters.length;
-    }
-  }
-
-  return {
-    statsKnown: true,
-    weightedGroupCount,
-    totalWeightedFilters,
-    firstWeightedGroupFilters,
-  };
-}
-
 function getWeightedModCount(query: WeightedTradeQuery): number | string {
-  const counts = getWeightedFilterCounts(query);
-  return counts.statsKnown ? counts.totalWeightedFilters : '?';
-}
-
-function hasWeightedStatsGroup(query: WeightedTradeQuery): boolean {
-  return getWeightedFilterCounts(query).weightedGroupCount > 0;
-}
-
-function formatWeightedFilterSummary(query: WeightedTradeQuery): string {
-  const counts = getWeightedFilterCounts(query);
-  if (!counts.statsKnown) return 'unknown';
-  const firstGroup =
-    counts.firstWeightedGroupFilters === null
-      ? 'none'
-      : String(counts.firstWeightedGroupFilters);
-  return `${counts.totalWeightedFilters} total, first weighted group: ${firstGroup}`;
-}
-
-function readRecordField(parent: unknown, key: string): Record<string, unknown> | undefined {
-  if (!isRecord(parent)) return undefined;
-  const child = parent[key];
-  return isRecord(child) ? child : undefined;
-}
-
-function readQueryShapeValue(parent: unknown, key: string): string | undefined {
-  if (!isRecord(parent)) return undefined;
-  const value = parent[key];
-  if (typeof value === 'string' && value.length > 0) return value;
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  if (isRecord(value)) {
-    const option = value.option;
-    if (typeof option === 'string' && option.length > 0) return option;
-  }
-  return undefined;
-}
-
-function describeWeightedTradeQueryShape(query: WeightedTradeQuery): string {
-  const queryBody = query.query;
-  const typeFilters = readRecordField(readRecordField(queryBody, 'filters'), 'type_filters');
-  const typeFilterBody = readRecordField(typeFilters, 'filters');
-  const category =
-    readQueryShapeValue(typeFilterBody, 'category') ??
-    readQueryShapeValue(queryBody, 'category') ??
-    readQueryShapeValue(query, 'category') ??
-    'unknown';
-  const type =
-    readQueryShapeValue(queryBody, 'type') ??
-    readQueryShapeValue(query, 'type') ??
-    'unknown';
-  const name =
-    readQueryShapeValue(queryBody, 'name') ??
-    readQueryShapeValue(query, 'name') ??
-    'unknown';
-
-  return `category=${category}, type=${type}, name=${name}`;
-}
-
-function formatWeightedTradeQueryDiagnostics(query: WeightedTradeQuery): string {
-  return `weighted filters: ${formatWeightedFilterSummary(query)}; query shape: ${describeWeightedTradeQueryShape(query)}`;
-}
-
-function getAbsNumericWeight(filter: unknown): number | null {
-  if (!isRecord(filter)) return null;
-  const value = filter.value;
-  if (!isRecord(value)) return null;
-  const weight = value.weight;
-  return typeof weight === 'number' && Number.isFinite(weight) ? Math.abs(weight) : null;
-}
-
-function cloneWeightedTradeQuery(query: WeightedTradeQuery): WeightedTradeQuery {
-  return JSON.parse(JSON.stringify(query)) as WeightedTradeQuery;
-}
-
-function buildTopWeightedFilterQuery(
-  query: WeightedTradeQuery,
-  maxFilters: number,
-): {
-  query: WeightedTradeQuery;
-  originalWeightedFilterCount: number;
-  reducedWeightedFilterCount: number;
-  reduced: boolean;
-} {
-  const stats = query.query?.stats;
-  if (!Array.isArray(stats)) {
-    return {
-      query,
-      originalWeightedFilterCount: 0,
-      reducedWeightedFilterCount: 0,
-      reduced: false,
-    };
-  }
-
-  const weightedGroupIndex = stats.findIndex(isWeightedStatsGroup);
-  if (weightedGroupIndex < 0) {
-    return {
-      query,
-      originalWeightedFilterCount: 0,
-      reducedWeightedFilterCount: 0,
-      reduced: false,
-    };
-  }
-
-  const weightedGroup = stats[weightedGroupIndex];
-  if (!isWeightedStatsGroup(weightedGroup)) {
-    return {
-      query,
-      originalWeightedFilterCount: 0,
-      reducedWeightedFilterCount: 0,
-      reduced: false,
-    };
-  }
-  const originalWeightedFilterCount = weightedGroup.filters.length;
-  if (originalWeightedFilterCount <= maxFilters) {
-    return {
-      query,
-      originalWeightedFilterCount,
-      reducedWeightedFilterCount: originalWeightedFilterCount,
-      reduced: false,
-    };
-  }
-
-  const reducedQuery = cloneWeightedTradeQuery(query);
-  const reducedStats = reducedQuery.query?.stats;
-  if (!Array.isArray(reducedStats) || !isWeightedStatsGroup(reducedStats[weightedGroupIndex])) {
-    return {
-      query,
-      originalWeightedFilterCount,
-      reducedWeightedFilterCount: originalWeightedFilterCount,
-      reduced: false,
-    };
-  }
-
-  const rankedFilters = reducedStats[weightedGroupIndex].filters
-    .map((filter, index) => ({
-      filter,
-      index,
-      absWeight: getAbsNumericWeight(filter),
-    }))
-    .sort((a, b) => {
-      if (a.absWeight !== null && b.absWeight !== null) {
-        const byWeight = b.absWeight - a.absWeight;
-        return byWeight !== 0 ? byWeight : a.index - b.index;
-      }
-      if (a.absWeight !== null) return -1;
-      if (b.absWeight !== null) return 1;
-      return a.index - b.index;
-    })
-    .slice(0, maxFilters)
-    .sort((a, b) => a.index - b.index);
-
-  reducedStats[weightedGroupIndex].filters = rankedFilters.map((entry) => entry.filter);
-
-  return {
-    query: reducedQuery,
-    originalWeightedFilterCount,
-    reducedWeightedFilterCount: rankedFilters.length,
-    reduced: true,
-  };
-}
-
-function isQueryTooComplexError(message: string): boolean {
-  return /query is too complex/i.test(message);
+  return query.query?.stats?.[0]?.filters?.length ?? '?';
 }
 
 function formatError(error: unknown): string {
@@ -1549,72 +1344,21 @@ export async function handleFindWeightedTradeItems(
     const { query: apiQuery, warnings: prepareWarnings } = prepareWeightedTradeQueryForApi(
       pobQuery as WeightedTradeQuery,
     );
-    let effectiveQuery = apiQuery;
-    const searchWarnings: string[] = [];
     let searchResult;
     try {
       searchResult = await context.tradeClient.searchItems(league, apiQuery as unknown as TradeQuery);
     } catch (error) {
-      const originalErrorMessage = formatError(error);
-      if (!isQueryTooComplexError(originalErrorMessage)) {
-        throw new Error(`trade API query failed for slot "${normalizedSlot}": ${originalErrorMessage}`);
-      }
-
-      if (hasWeightedStatsGroup(apiQuery) && !process.env.POE_SESSION_ID) {
-        throw new Error(
-          `trade API query failed for slot "${normalizedSlot}": ${originalErrorMessage}. ` +
-          'The query contains a type:"weight" stat group and POE_SESSION_ID is not configured; ' +
-          'GGG rejects anonymous weighted-stat searches with "Query is too complex". ' +
-          'Set POE_SESSION_ID before using find_weighted_trade_items. ' +
-          `Diagnostics: ${formatWeightedTradeQueryDiagnostics(apiQuery)}.`
-        );
-      }
-
-      const fallback = buildTopWeightedFilterQuery(
-        apiQuery,
-        WEIGHTED_TRADE_QUERY_TOO_COMPLEX_FALLBACK_FILTERS,
-      );
-      if (!fallback.reduced) {
-        throw new Error(
-          `trade API query failed for slot "${normalizedSlot}": ${originalErrorMessage}. ` +
-          `No smaller top-N weighted retry was available (${formatWeightedTradeQueryDiagnostics(apiQuery)}).`
-        );
-      }
-
-      try {
-        searchResult = await context.tradeClient.searchItems(
-          league,
-          fallback.query as unknown as TradeQuery,
-        );
-        effectiveQuery = fallback.query;
-        searchWarnings.push(
-          `Original GGG /search rejected the weighted query as too complex; retried with top ` +
-          `${fallback.reducedWeightedFilterCount} of ${fallback.originalWeightedFilterCount} ` +
-          'weighted filters. Candidate pool is a narrowed subset of the original query intent; ' +
-          'dropped filters were lower-weight or unweighted, and local PoB ranking still re-ranks fetched candidates.'
-        );
-      } catch (fallbackError) {
-        throw new Error(
-          `trade API query failed for slot "${normalizedSlot}": original /search failed: ` +
-          `${originalErrorMessage}. Top-N fallback also failed after keeping ` +
-          `${fallback.reducedWeightedFilterCount} of ${fallback.originalWeightedFilterCount} ` +
-          `weighted filters: ${formatError(fallbackError)}. ` +
-          `Original diagnostics: ${formatWeightedTradeQueryDiagnostics(apiQuery)}. ` +
-          `Fallback diagnostics: ${formatWeightedTradeQueryDiagnostics(fallback.query)}.`
-        );
-      }
+      throw new Error(`trade API query failed for slot "${normalizedSlot}": ${formatError(error)}`);
     }
 
-    const warningText = [warning, ...searchWarnings].filter((line): line is string => !!line);
+    const warningText = [warning].filter((line): line is string => !!line);
 
     if (!searchResult.result || searchResult.result.length === 0) {
       const empty =
         `=== Weighted BIS Search (${league}, slot: ${normalizedSlot}) ===\n` +
         `No items found.\n` +
         warningText.map((line) => `Warning: ${line}\n`).join('') +
-        `Query had ${getWeightedModCount(effectiveQuery)} weighted mods.\n` +
-        `Query shape: ${describeWeightedTradeQueryShape(effectiveQuery)} | ` +
-        `Weighted filters: ${formatWeightedFilterSummary(effectiveQuery)}.\n`;
+        `Query had ${getWeightedModCount(pobQuery as WeightedTradeQuery)} weighted mods.\n`;
       return { content: [{ type: 'text', text: empty }] };
     }
 
@@ -1752,7 +1496,6 @@ export async function handleFindWeightedTradeItems(
 
     let output = `=== Weighted BIS Search (${league}, slot: ${normalizedSlot}) ===\n`;
     output += `Total matches: ${searchResult.total} | Ranked: ${rankedDetails.length}/${fetchedItems.length} | Showing: ${orderedItems.length}\n`;
-    output += `Query shape: ${describeWeightedTradeQueryShape(effectiveQuery)} | Weighted filters: ${formatWeightedFilterSummary(effectiveQuery)}\n`;
     output += `🔗 ${getTradeSearchUrl(league, searchResult.id)}\n`;
     output += `Sort: ${resolvedSortMode}`;
     if (resolvedSortMode === 'StatValue' || resolvedSortMode === 'StatValuePrice') {
