@@ -1210,6 +1210,90 @@ function extractResistValue(item: any, element: string): number {
  * TradeQueryGenerator weighted-search engine. Generates a query JSON keyed by
  * real DPS/eHP impact for the build, then executes it against the PoE trade API.
  */
+type WeightedTradeSortMode = 'StatValue' | 'StatValuePrice' | 'Price' | 'Weight';
+
+const WEIGHTED_TRADE_VALID_SORT_MODES: ReadonlySet<WeightedTradeSortMode> = new Set([
+  'StatValue',
+  'StatValuePrice',
+  'Price',
+  'Weight',
+]);
+
+const WEIGHTED_TRADE_FETCH_CAP = 10;
+
+// Trade-API currency code → poe.ninja currencyTypeName. Trade uses short codes,
+// poe.ninja uses canonical orb names. Limited to the most common league
+// currencies; unknown codes fall through to omitting the chaos value (and
+// price-aware sort modes degrade gracefully on the Lua side).
+const TRADE_CURRENCY_TO_NINJA_NAME: Record<string, string> = {
+  chaos: 'Chaos Orb',
+  div: 'Divine Orb',
+  divine: 'Divine Orb',
+  exa: 'Exalted Orb',
+  exalted: 'Exalted Orb',
+  mirror: 'Mirror of Kalandra',
+  alch: 'Orb of Alchemy',
+  alt: 'Orb of Alteration',
+  regal: 'Regal Orb',
+  fuse: 'Orb of Fusing',
+  vaal: 'Vaal Orb',
+  blessed: 'Blessed Orb',
+  scour: 'Orb of Scouring',
+  chrome: 'Chromatic Orb',
+  jew: "Jeweller's Orb",
+  gcp: "Gemcutter's Prism",
+  awakened: "Awakener's Orb",
+};
+
+function decodeItemTextBase64(b64: string | undefined): string | null {
+  if (typeof b64 !== 'string' || b64 === '') return null;
+  try {
+    return Buffer.from(b64, 'base64').toString('utf-8');
+  } catch {
+    return null;
+  }
+}
+
+function formatStatDelta(stat: string, delta: number): string {
+  const sign = delta >= 0 ? '+' : '';
+  if (Math.abs(delta) >= 1) {
+    return `${stat} ${sign}${Math.round(delta).toLocaleString('en-US')}`;
+  }
+  return `${stat} ${sign}${delta.toFixed(3)}`;
+}
+
+/**
+ * Resolve chaos-equivalent for a listing price using poe.ninja rates when
+ * available. Returns null if we can't resolve confidently.
+ */
+function resolveChaosEquivalent(
+  amount: number | undefined,
+  currency: string | undefined,
+  rates: Map<string, number> | null,
+): number | null {
+  if (typeof amount !== 'number' || amount <= 0) return null;
+  if (!currency) return null;
+  const lowered = currency.toLowerCase();
+  if (lowered === 'chaos') return amount;
+  if (!rates) return null;
+  const ninjaName = TRADE_CURRENCY_TO_NINJA_NAME[lowered];
+  if (!ninjaName) return null;
+  const rate = rates.get(ninjaName);
+  if (typeof rate !== 'number' || rate <= 0) return null;
+  return amount * rate;
+}
+
+function isStatWeightArray(value: unknown): value is Array<{ stat: string; label?: string; weightMult: number }> {
+  if (!Array.isArray(value)) return false;
+  for (const entry of value) {
+    if (!entry || typeof entry !== 'object') return false;
+    const e = entry as Record<string, unknown>;
+    if (typeof e.stat !== 'string' || e.stat === '') return false;
+    if (typeof e.weightMult !== 'number') return false;
+  }
+  return true;
+}
+
 export async function handleFindWeightedTradeItems(
   context: WeightedTradeContext,
   args: {
@@ -1217,12 +1301,19 @@ export async function handleFindWeightedTradeItems(
     slot: string;
     options?: Record<string, unknown>;
     limit?: number;
+    sortMode?: WeightedTradeSortMode;
   }
 ): Promise<{ content: Array<{ type: string; text: string }> }> {
   return wrapHandler('find weighted trade items', async () => {
     const { league, slot, options, limit = 5 } = args;
+    const sortMode: WeightedTradeSortMode = args.sortMode ?? 'StatValue';
     if (!league) throw new Error('league is required');
     if (!slot) throw new Error('slot is required (e.g. "Belt", "Ring 1", "Body Armour")');
+    if (!WEIGHTED_TRADE_VALID_SORT_MODES.has(sortMode)) {
+      throw new Error(
+        `invalid sortMode: "${sortMode}" (allowed: StatValue, StatValuePrice, Price, Weight)`,
+      );
+    }
     const normalizedSlot = normalizeWeightedTradeSlot(slot);
 
     await context.ensureLuaClient();
@@ -1250,7 +1341,9 @@ export async function handleFindWeightedTradeItems(
       throw new Error(`PoB returned no query JSON${warning ? ` (${warning})` : ''}`);
     }
 
-    const { query: apiQuery, warnings } = prepareWeightedTradeQueryForApi(pobQuery as WeightedTradeQuery);
+    const { query: apiQuery, warnings: prepareWarnings } = prepareWeightedTradeQueryForApi(
+      pobQuery as WeightedTradeQuery,
+    );
     let searchResult;
     try {
       searchResult = await context.tradeClient.searchItems(league, apiQuery as unknown as TradeQuery);
@@ -1258,10 +1351,7 @@ export async function handleFindWeightedTradeItems(
       throw new Error(`trade API query failed for slot "${normalizedSlot}": ${formatError(error)}`);
     }
 
-    const warningText = [
-      warning,
-      ...warnings,
-    ].filter((line): line is string => !!line);
+    const warningText = [warning].filter((line): line is string => !!line);
 
     if (!searchResult.result || searchResult.result.length === 0) {
       const empty =
@@ -1272,17 +1362,157 @@ export async function handleFindWeightedTradeItems(
       return { content: [{ type: 'text', text: empty }] };
     }
 
-    const cap = Math.min(limit, 10);
-    const itemIds = searchResult.result.slice(0, cap);
-    const items = await context.tradeClient.fetchItems(itemIds, searchResult.id);
+    const itemIds = searchResult.result.slice(0, WEIGHTED_TRADE_FETCH_CAP);
+    const fetchedItems = await context.tradeClient.fetchItems(itemIds, searchResult.id);
+
+    // Look up currency exchange rates if needed for price-aware ranking. Skip
+    // the network call when nothing is non-chaos-priced.
+    const needsRates =
+      (sortMode === 'Price' || sortMode === 'StatValuePrice') &&
+      fetchedItems.some(
+        (l) =>
+          l.listing.price &&
+          typeof l.listing.price.amount === 'number' &&
+          (l.listing.price.currency || '').toLowerCase() !== 'chaos',
+      );
+    let exchangeRates: Map<string, number> | null = null;
+    if (needsRates && context.ninjaClient) {
+      try {
+        exchangeRates = await context.ninjaClient.getCurrencyExchangeMap(league);
+      } catch {
+        exchangeRates = null;
+      }
+    }
+
+    const rankInputs = fetchedItems.map((listing) => {
+      const itemString = decodeItemTextBase64(listing.item.extended?.text);
+      const priceAmount = listing.listing.price?.amount;
+      const priceCurrency = listing.listing.price?.currency;
+      const chaos = resolveChaosEquivalent(priceAmount, priceCurrency, exchangeRates);
+      return {
+        item_string: itemString ?? '',
+        price:
+          typeof priceAmount === 'number'
+            ? {
+                amount: priceAmount,
+                currency: priceCurrency,
+                chaos: chaos ?? undefined,
+              }
+            : undefined,
+      };
+    });
+
+    const rankableInputs = rankInputs.filter((entry) => entry.item_string.length > 0);
+    const skippedCount = rankInputs.length - rankableInputs.length;
+
+    let rankedOrder: number[] = [];
+    let resolvedSortMode: WeightedTradeSortMode = sortMode;
+    let rankedDetails: Array<{
+      index: number;
+      weight: number;
+      deltas: Record<string, number>;
+      error?: string;
+    }> = [];
+    const rankWarnings: string[] = [];
+
+    if (rankableInputs.length === 0) {
+      rankWarnings.push(
+        'PoB ranking skipped — no fetched items exposed extended.text (base64 item description).',
+      );
+    } else {
+      // Forward user-supplied statWeights so the local ranking matches the
+      // weights the user asked PoB to query against. Without this, rankTradeResults
+      // silently uses the Lua-side default (FullDPS 1.0 + TotalEHP 0.5) and the
+      // ranking can disagree with the search.
+      const userStatWeights = options
+        ? (options as Record<string, unknown>).statWeights
+        : undefined;
+      const validatedStatWeights = isStatWeightArray(userStatWeights) ? userStatWeights : undefined;
+      try {
+        const rankResult = await luaClient.rankTradeResults({
+          slot: normalizedSlot,
+          items: rankableInputs,
+          sortMode,
+          statWeights: validatedStatWeights,
+        });
+        rankedDetails = rankResult.ranked;
+        if (rankResult.sortMode && rankResult.sortMode !== sortMode) {
+          resolvedSortMode = rankResult.sortMode as WeightedTradeSortMode;
+          rankWarnings.push(
+            `Requested sort "${sortMode}" fell back to "${resolvedSortMode}" (likely missing prices).`,
+          );
+        }
+        rankedOrder = rankResult.ranked.map((r) => r.index - 1); // Lua 1-based → 0-based on rankableInputs
+      } catch (error) {
+        rankWarnings.push(`PoB ranking failed: ${formatError(error)} — falling back to fetch order.`);
+      }
+    }
+
+    const detailByOriginalIndex = new Map<number, { weight: number; deltas: Record<string, number>; error?: string }>();
+    if (rankedOrder.length > 0) {
+      // rankableInputs[k] corresponds to fetchedItems[fetchedIndexOfRankable[k]]
+      const fetchedIndexOfRankable: number[] = [];
+      rankInputs.forEach((entry, originalIdx) => {
+        if (entry.item_string.length > 0) fetchedIndexOfRankable.push(originalIdx);
+      });
+      rankedDetails.forEach((detail) => {
+        const rankableIdx = detail.index - 1;
+        const fetchedIdx = fetchedIndexOfRankable[rankableIdx];
+        if (typeof fetchedIdx === 'number') {
+          detailByOriginalIndex.set(fetchedIdx, {
+            weight: detail.weight,
+            deltas: detail.deltas,
+            error: detail.error,
+          });
+        }
+      });
+    }
+
+    // Build the final ordered list: ranked items first (in rank order), then any
+    // items we couldn't rank (preserves visibility of unrankable listings).
+    const orderedFetchedIndices: number[] = [];
+    if (rankedOrder.length > 0) {
+      const fetchedIndexOfRankable: number[] = [];
+      rankInputs.forEach((entry, originalIdx) => {
+        if (entry.item_string.length > 0) fetchedIndexOfRankable.push(originalIdx);
+      });
+      rankedDetails.forEach((detail) => {
+        const fetchedIdx = fetchedIndexOfRankable[detail.index - 1];
+        if (typeof fetchedIdx === 'number') orderedFetchedIndices.push(fetchedIdx);
+      });
+      rankInputs.forEach((entry, originalIdx) => {
+        if (entry.item_string.length === 0) orderedFetchedIndices.push(originalIdx);
+      });
+    } else {
+      // No ranking happened → preserve fetch (= price-asc) order.
+      fetchedItems.forEach((_, idx) => orderedFetchedIndices.push(idx));
+    }
+
+    const cap = Math.min(limit, orderedFetchedIndices.length);
+    const orderedItems = orderedFetchedIndices.slice(0, cap).map((idx) => ({
+      listing: fetchedItems[idx],
+      detail: detailByOriginalIndex.get(idx),
+    }));
 
     let output = `=== Weighted BIS Search (${league}, slot: ${normalizedSlot}) ===\n`;
-    output += `Total matches: ${searchResult.total} | Showing: ${items.length}\n`;
+    output += `Total matches: ${searchResult.total} | Ranked: ${rankedDetails.length}/${fetchedItems.length} | Showing: ${orderedItems.length}\n`;
     output += `🔗 ${getTradeSearchUrl(league, searchResult.id)}\n`;
+    output += `Sort: ${resolvedSortMode}`;
+    if (resolvedSortMode === 'StatValue' || resolvedSortMode === 'StatValuePrice') {
+      output += ` (build-impact ranked locally via PoB)`;
+    }
+    output += `\n`;
+    if (skippedCount > 0) {
+      output += `Note: ${skippedCount} fetched listing(s) lacked extended.text and were left unranked.\n`;
+    }
     for (const line of warningText) output += `Warning: ${line}\n`;
+    for (const line of rankWarnings) output += `Warning: ${line}\n`;
+    if (prepareWarnings.length > 0) {
+      output += `Note: PoB-generated query had ${prepareWarnings.length} unsupported sort key(s) stripped before submission to GGG; ranking is computed locally so the server-side sort is not load-bearing.\n`;
+    }
     output += `\n`;
 
-    items.forEach((listing, i) => {
+    orderedItems.forEach(({ listing, detail }, i) => {
       const item = listing.item;
       const price = listing.listing.price;
       const seller = listing.listing.account?.name ?? 'unknown';
@@ -1293,6 +1523,22 @@ export async function handleFindWeightedTradeItems(
       output += `\n`;
       if (price) output += `   Price: ${price.amount} ${price.currency}\n`;
       output += `   Seller: ${seller}\n`;
+      if (detail && !detail.error) {
+        const deltaParts: string[] = [];
+        for (const [stat, value] of Object.entries(detail.deltas)) {
+          if (typeof value === 'number' && Math.abs(value) > 1e-6) {
+            deltaParts.push(formatStatDelta(stat, value));
+          }
+        }
+        if (deltaParts.length > 0) {
+          output += `   Impact: ${deltaParts.join(', ')}\n`;
+        }
+        if (typeof detail.weight === 'number') {
+          output += `   Weighted score: ${detail.weight.toFixed(4)}\n`;
+        }
+      } else if (detail?.error) {
+        output += `   Impact: (unrankable: ${detail.error})\n`;
+      }
       const mods = [
         ...(item.explicitMods || []),
         ...(item.implicitMods || []),

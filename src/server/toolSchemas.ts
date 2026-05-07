@@ -1631,7 +1631,7 @@ export function getTradeToolSchemas(): any[] {
     },
     {
       name: "find_weighted_trade_items",
-      description: "Find best-in-slot trade items for the LOADED PoB build using PoB's TradeQueryGenerator weighted-search engine. Ranks items by real DPS/eHP impact for THIS build (not generic heuristics). Requires a build to be loaded via lua_load_build / lua_import_character first. REQUIRES: POE_TRADE_ENABLED=true and POB_LUA_ENABLED=true.",
+      description: "Find best-in-slot trade items for the LOADED PoB build. Server-side sort is unsupported by the GGG JSON API for weighted queries, so candidates are fetched from GGG (price-asc, the only viable JSON-API sort) and re-ranked locally by PoB simulating the swap (calcsTab miscCalculator + WeightedRatioOutputs — same code path as the GUI's Trade tab). Output shows per-item stat deltas (Impact line) for transparency. Requires a build to be loaded via lua_load_build / lua_import_character first. REQUIRES: POE_TRADE_ENABLED=true and POB_LUA_ENABLED=true.",
       inputSchema: {
         type: "object",
         properties: {
@@ -1643,13 +1643,18 @@ export function getTradeToolSchemas(): any[] {
             type: "string",
             description: "Equipment slot to search BIS for. Examples: 'Belt', 'Helmet', 'Body Armour', 'Gloves', 'Boots', 'Amulet', 'Ring 1', 'Ring 2', 'Weapon 1', 'Weapon 2', 'Helmet Abyssal Socket #1'. Must match PoB's equipped slot naming; item names such as Watcher's Eye are not slot names.",
           },
+          sortMode: {
+            type: "string",
+            enum: ["StatValue", "StatValuePrice", "Price", "Weight"],
+            description: "Local re-ranking mode applied AFTER GGG returns candidates. StatValue (default): highest weighted build-impact first. StatValuePrice: weighted impact divided by chaos-equivalent price (best per chaos). Price: chaos-equivalent ascending (cheapest first). Weight: preserve GGG's returned order (no re-ranking). Same modes as PoB's Trade tab dropdown. StatValuePrice and Price both downgrade to StatValue when any candidate is missing chaos-equivalent price; the warning surfaces in the output.",
+          },
           options: {
             type: "object",
-            description: "Pass-through options forwarded to PoB's TradeQueryGenerator:StartQuery. Optional fields: statWeights (overrides build's default sort list), influence1/influence2 (1=None), jewelType ('Any'|'Base'|'Abyss'), includeMirrored, includeCorrupted, includeScourge, includeEldritch, includeSynthesis, maxPrice, maxPriceType, maxLevel, sockets, links, special{itemName} (e.g. 'Megalomaniac'). When omitted, uses the loaded build's defaults. If PoB emits a statgroup weighted sort key unsupported by the public trade JSON API, MCP falls back to price ascending and warns that results are weighted-filter candidates, not final PoB-ranked order.",
+            description: "Pass-through options forwarded to PoB's TradeQueryGenerator:StartQuery. Optional fields: statWeights (overrides build's default sort list), influence1/influence2 (1=None), jewelType ('Any'|'Base'|'Abyss'), includeMirrored, includeCorrupted, includeScourge, includeEldritch, includeSynthesis, maxPrice, maxPriceType, maxLevel, sockets, links, special{itemName} (e.g. 'Megalomaniac'). When omitted, uses the loaded build's defaults.",
           },
           limit: {
             type: "number",
-            description: "Maximum results to fetch full details for (default: 5, max: 10). Total search match count is always returned.",
+            description: "Maximum results to display after local ranking (default: 5, max: 10). Up to 10 candidates are always fetched from GGG to feed the ranker; this only caps the displayed list.",
           },
         },
         required: ["league", "slot"],
