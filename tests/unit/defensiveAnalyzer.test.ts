@@ -371,6 +371,138 @@ describe('analyzeDefenses — gap detectors (retro #82)', () => {
     });
   });
 
+  // Positive-pin tests: each citation below is verified against PoB Data
+  // 3.28 (current). The intent is to catch silent removal of the verified
+  // text — e.g., a future "cleanup" that turns named recommendations into
+  // vague generic advice. If a citation needs to be replaced, update both
+  // the analyzer and the assertion in the same diff.
+  describe('verified citations remain pinned (PoB Data 3.28)', () => {
+    it('uncapped resistance advice keeps Diamond Skin tree notable + Purity auras', () => {
+      // Diamond Skin: TreeData/3_28/tree.lua name node verified.
+      // Purity of Fire/Cold/Lightning: Data/Skills/act_str.lua aura skills.
+      const stats = { ...healthyStats(), FireResist: 50 };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'resistance', 'Uncapped');
+      expect(rec).toBeDefined();
+      const allText = rec!.solutions.join(' ');
+      expect(allText).toContain('Diamond Skin');
+      expect(allText).toMatch(/Purity/);
+    });
+
+    it('low life pool advice keeps Constitution + Heart of Oak life wheels', () => {
+      // Both names verified in TreeData/3_28/tree.lua.
+      const stats = { ...healthyStats(), Life: 1500, EnergyShield: 0, TotalEHP: 0 };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'life');
+      expect(rec).toBeDefined();
+      const allText = rec!.solutions.join(' ');
+      expect(allText).toContain('Constitution');
+      expect(allText).toContain('Heart of Oak');
+    });
+
+    it('no-mitigation advice keeps Determination + Grace auras', () => {
+      // Determination / Grace: Data/Skills/act_str.lua, act_dex.lua.
+      const stats = {
+        ...healthyStats(),
+        Armour: 0,
+        Evasion: 0,
+        BlockChance: 0,
+        PhysicalDamageReduction: 0,
+        EnduranceChargesMax: 0,
+      };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'mitigation');
+      expect(rec).toBeDefined();
+      const allText = rec!.solutions.join(' ');
+      expect(allText).toContain('Determination');
+      expect(allText).toContain('Grace');
+    });
+
+    it('no-sustain advice keeps Vitality + Warlord\'s Mark + Wicked Ward', () => {
+      // Vitality / Warlord's Mark: Data/Skills/* aura + curse.
+      // Wicked Ward: TreeData/3_28/tree.lua keystone (line 60312).
+      const stats = {
+        ...healthyStats(),
+        LifeRegen: 0,
+        LifeLeechGainRate: 0,
+        ESRecharge: 0,
+      };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'sustain');
+      expect(rec).toBeDefined();
+      const allText = rec!.solutions.join(' ');
+      expect(allText).toContain('Vitality');
+      expect(allText).toMatch(/Warlord['’]s Mark/);
+      expect(allText).toContain('Wicked Ward');
+    });
+
+    it('spell-defense gap advice keeps Aegis Aurora + Glancing Blows', () => {
+      // Aegis Aurora: Data/Uniques/shield.lua. Glancing Blows: tree keystone.
+      const stats = {
+        ...healthyStats(),
+        EffectiveSpellSuppressionChance: 0,
+        SpellSuppressionChance: 0,
+        SpellBlockChance: 0,
+        SpellDodgeChance: 0,
+      };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'avoidance', 'spell-hit defense');
+      expect(rec).toBeDefined();
+      const allText = rec!.solutions.join(' ');
+      expect(allText).toContain('Aegis Aurora');
+      expect(allText).toContain('Glancing Blows');
+    });
+
+    it('phys max-hit advice keeps Molten Shell, Immortal Call, Lightning Coil, Cloak of Flame', () => {
+      // All four verified: Data/Skills (guard skills) + Data/Uniques/body.lua.
+      const stats = { ...healthyStats(), PhysicalMaximumHitTaken: PHYS_MAXHIT_HIGH - 1 };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'maxhit', 'Physical max hit');
+      expect(rec).toBeDefined();
+      const allText = rec!.solutions.join(' ');
+      expect(allText).toContain('Molten Shell');
+      expect(allText).toContain('Immortal Call');
+      expect(allText).toContain('Lightning Coil');
+      expect(allText).toContain('Cloak of Flame');
+    });
+
+    it('elemental max-hit advice keeps Loreweave + Fortify cross-element scalers', () => {
+      // Loreweave: Data/Uniques/body.lua. Fortify: Data/Skills/sup_str.lua.
+      const stats = { ...healthyStats(), ColdMaximumHitTaken: ELEMENT_MAXHIT_HIGH - 1 };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'maxhit', 'Cold max hit');
+      expect(rec).toBeDefined();
+      const allText = rec!.solutions.join(' ');
+      expect(allText).toContain('Loreweave');
+      expect(allText).toContain('Fortify');
+    });
+
+    it('chaos max-hit advice keeps verified shield suffixes + Hunter prefix + CI keystone', () => {
+      // Suffixes "of Regularity" / "of Concord" / "of Harmony" verified
+      // at Data/ModItem.lua:2049-2051. Hunter influence prefix max-chaos-res
+      // verified at Data/ModItem.lua:5007-5009.
+      const stats = { ...healthyStats(), ChaosMaximumHitTaken: ELEMENT_MAXHIT_HIGH - 1 };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'maxhit', 'Chaos max hit');
+      expect(rec).toBeDefined();
+      const allText = rec!.solutions.join(' ');
+      expect(allText).toMatch(/of Regularity|of Concord|of Harmony/);
+      expect(allText).toMatch(/Hunter/);
+      expect(allText).toContain('Chaos Inoculation');
+    });
+
+    it('curse advice keeps Warding flask + "of the Owl" / "of the Kakapo" suffixes', () => {
+      // FlaskBuffCurseEffect4/5 verified at Data/ModFlask.lua:178-179.
+      const stats = { ...healthyStats(), CurseEffectOnSelf: 100 };
+      const result = analyzeDefenses(stats);
+      const rec = findRec(result.recommendations, 'curse');
+      expect(rec).toBeDefined();
+      const allText = rec!.solutions.join(' ');
+      expect(allText).toContain('Warding');
+      expect(allText).toMatch(/of the Owl|of the Kakapo/);
+    });
+  });
+
   describe('overall verdict downgrade — MickaMirageHiero scenario', () => {
     it('drops overall verdict from excellent when retro #82 conditions are met', () => {
       // Reproduce the documented blind-spot case: solid mitigation + recovery
