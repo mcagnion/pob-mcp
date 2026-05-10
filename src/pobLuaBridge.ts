@@ -8,6 +8,54 @@ type LuaRequest = { action: string; params?: Record<string, unknown> };
 /** Lua bridge response envelope — always an object with at minimum `ok: boolean` */
 type LuaResponse = { ok: boolean; error?: string; [key: string]: unknown };
 
+export interface PowerReportParams {
+  metric?: string;
+  scope?: "unallocated" | "allocated" | "both";
+  includeClusterCandidates?: boolean;
+  limit?: number;
+}
+
+export interface PowerReportRow {
+  id?: number | string;
+  name?: string;
+  type?: string;
+  allocated?: boolean;
+  x?: number;
+  y?: number;
+  power?: number;
+  pathPower?: number;
+  powerStr?: string;
+  pathPowerStr?: string;
+  pathDist?: number | string;
+  interpretation?: "gain_if_allocated" | "loss_if_removed" | "cluster_candidate" | string;
+}
+
+export interface PowerReportResult {
+  metric?: {
+    input?: string;
+    stat?: string;
+    label?: string;
+  };
+  buildName?: string;
+  scope?: "unallocated" | "allocated" | "both";
+  limit?: number;
+  requestedLimit?: number;
+  includeClusterCandidates?: boolean;
+  evaluated?: number;
+  returned?: number;
+  totalRows?: number;
+  rows?: PowerReportRow[];
+  configHash?: string;
+  config?: Record<string, unknown>;
+  calculation?: {
+    iterations?: number;
+    elapsedMs?: number;
+  };
+  warnings?: string[];
+  stateRestored?: boolean;
+  allocatedNodeSetRestored?: boolean;
+}
+
 export interface PoBLuaApiOptions {
   cwd?: string;
   cmd?: string; // default: 'luajit'
@@ -674,6 +722,12 @@ async setTree(params: {
       focus: String(res.focus ?? 'both'),
       dpsMetric: typeof res.dpsMetric === "string" ? res.dpsMetric : undefined,
     };
+  }
+
+  async powerReport(params: PowerReportParams = {}): Promise<PowerReportResult> {
+    const res = await this.send({ action: "power_report", params: { ...params } });
+    if (!res.ok) throw new Error(res.error || "power_report failed");
+    return res.result as PowerReportResult;
   }
 
   async getMasteryOptions(): Promise<any> {

@@ -451,6 +451,35 @@ export function getLuaToolSchemas(): any[] {
       },
     },
     {
+      name: "power_report",
+      description: "Return PoB's built-in Tree tab Power Report for the currently loaded Lua bridge build. Use this for raw single-stat node rankings from PoB's current Calcs/Configuration state. Unlike suggest_optimal_nodes, this does not search paths, spend a point budget, or produce a multi-step optimization plan.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          metric: {
+            type: "string",
+            description: "Power stat to rank. Aliases: dps=FullDPS, ehp/defence/defense=TotalEHP, life=Life. Exact PoB power stat ids are also accepted.",
+          },
+          scope: {
+            type: "string",
+            enum: ["unallocated", "allocated", "both"],
+            default: "unallocated",
+            description: "Rows to return: unallocated gains, allocated losses, or both (default: unallocated).",
+          },
+          include_cluster_candidates: {
+            type: "boolean",
+            default: true,
+            description: "Include unallocated cluster notable candidate rows from PoB's Power Report (default: true).",
+          },
+          limit: {
+            type: "number",
+            default: 20,
+            description: "Maximum rows to return (default: 20, hard max: 100).",
+          },
+        },
+      },
+    },
+    {
       name: "lua_set_tree",
       description: "Set passive tree allocation (modifies currently loaded build). IMPORTANT: (1) All nodes must form a connected path from the class start node — any node not reachable through other allocated nodes back to the start will be silently dropped. Use find_path_to_node first to discover the intermediate travel nodes needed to reach your target. (2) Maximum 8 ascendancy points — do not allocate more than 8 ascendancy nodes (excluding the ascendancy start node).",
       inputSchema: {
@@ -940,7 +969,7 @@ export function getOptimizationToolSchemas(): any[] {
     },
     {
       name: "suggest_optimal_nodes",
-      description: "AI-powered suggestion of optimal passive nodes based on build goals",
+      description: "Heuristic, pathing-aware passive node optimization for a build goal and point budget. Use power_report instead when you need PoB's raw single-stat Tree tab ranking without path search or multi-step optimization.",
       inputSchema: {
         type: "object",
         properties: {
