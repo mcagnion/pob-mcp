@@ -1,4 +1,4 @@
-import type { PoBLuaApiClient } from "../pobLuaBridge.js";
+import type { PoBLuaApiClient, PowerReportParams, PowerReportResult, PowerReportRow } from "../pobLuaBridge.js";
 import { handleGetBuildIssues } from "./buildGoalsHandlers.js";
 import fs from "fs/promises";
 import path from "path";
@@ -340,6 +340,99 @@ const ASCENDANCY_NAMES: Record<number, Record<number, string>> = {
   6: {1:'Assassin', 2:'Trickster', 3:'Saboteur'},
 };
 
+function formatPowerNumber(value: unknown, fallback = "-"): string {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.abs(value) >= 1000 ? Math.round(value).toLocaleString() : value.toFixed(2);
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  return fallback;
+}
+
+function formatPowerReportInterpretation(row: PowerReportRow): string {
+  switch (row.interpretation) {
+    case "loss_if_removed":
+      return "loss if removed";
+    case "cluster_candidate":
+      return "cluster notable candidate";
+    case "gain_if_allocated":
+    default:
+      return "gain if allocated";
+  }
+}
+
+function parsePowerDisplay(value: string | undefined): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number.parseFloat(value.replace(/[+,]/g, ""));
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function shouldShowRawPower(row: PowerReportRow): boolean {
+  if (typeof row.power !== "number" || !Number.isFinite(row.power) || !row.powerStr) {
+    return false;
+  }
+  const displayed = parsePowerDisplay(row.powerStr);
+  return displayed === undefined || Math.abs(displayed - row.power) > 0.01;
+}
+
+function formatPowerReportResult(report: PowerReportResult): string {
+  const rows = Array.isArray(report.rows) ? report.rows : [];
+  const metricLabel = report.metric?.label || report.metric?.stat || "Unknown";
+  const metricStat = report.metric?.stat && report.metric.stat !== metricLabel ? ` (${report.metric.stat})` : "";
+  const clusterText = report.includeClusterCandidates === false ? "excluded" : "included";
+  const lines: string[] = [
+    "=== PoB Power Report ===",
+    "",
+    `Metric: ${metricLabel}${metricStat}`,
+  ];
+
+  if (report.buildName) {
+    lines.push(`Build: ${report.buildName}`);
+  }
+  lines.push(`Scope: ${report.scope ?? "unallocated"} | Cluster candidates: ${clusterText}`);
+  lines.push(`Rows: showing ${report.returned ?? rows.length} of ${report.evaluated ?? rows.length} matching rows (${report.totalRows ?? "?"} total from PoB)`);
+  if (report.configHash) {
+    lines.push(`Config hash: ${report.configHash}`);
+  }
+  if (report.calculation) {
+    lines.push(`Calculation: ${report.calculation.iterations ?? "?"} BuildPower step(s), ${report.calculation.elapsedMs ?? "?"} ms`);
+  }
+  lines.push("");
+  lines.push("Caveat: this uses the currently loaded PoB Calcs/Configuration state and ranks one selected stat only. It does not path-search or optimize multi-step allocations.");
+  lines.push("");
+
+  if (report.warnings?.length) {
+    lines.push("Warnings:");
+    for (const warning of report.warnings) {
+      lines.push(`- ${warning}`);
+    }
+    lines.push("");
+  }
+
+  if (rows.length === 0) {
+    lines.push("No matching Power Report rows returned.");
+    return lines.join("\n");
+  }
+
+  rows.forEach((row, index) => {
+    const id = row.id != null ? ` [${row.id}]` : "";
+    const type = row.type ? ` (${row.type})` : "";
+    const path = row.pathDist != null ? `, path ${row.pathDist}` : "";
+    const power = row.powerStr || formatPowerNumber(row.power);
+    const rawPower = shouldShowRawPower(row) ? ` raw ${formatPowerNumber(row.power)}` : "";
+    const pathPower = row.pathPowerStr || formatPowerNumber(row.pathPower);
+
+    lines.push(`${index + 1}. ${row.name || "Unnamed"}${id}${type}`);
+    lines.push(`   ${formatPowerReportInterpretation(row)}${path}`);
+    lines.push(`   Power: ${power}${rawPower} | Per-point/path: ${pathPower}`);
+  });
+
+  return lines.join("\n");
+}
+
 export async function handleLuaGetTree(context: LuaHandlerContext, includeNodeIds?: boolean) {
   return wrapHandler('get passive tree', async () => {
     await context.ensureLuaClient();
@@ -389,6 +482,39 @@ export async function handleLuaGetTree(context: LuaHandlerContext, includeNodeId
         {
           type: "text" as const,
           text,
+        },
+      ],
+    };
+  });
+}
+
+export async function handlePowerReport(
+  context: LuaHandlerContext,
+  metric?: string,
+  scope?: PowerReportParams["scope"],
+  includeClusterCandidates?: boolean,
+  limit?: number
+) {
+  return wrapHandler('generate power report', async () => {
+    await context.ensureLuaClient();
+
+    const luaClient = context.getLuaClient();
+    if (!luaClient) {
+      throw new Error('Lua client not initialized. Use lua_start first.');
+    }
+
+    const report = await luaClient.powerReport({
+      metric,
+      scope,
+      includeClusterCandidates,
+      limit,
+    });
+
+    return {
+      content: [
+        {
+          type: "text" as const,
+          text: formatPowerReportResult(report),
         },
       ],
     };
